@@ -43,10 +43,10 @@ jobs:
 
     steps:
       - name: Descargar el código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Instalar el SDK de .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           # Se lee de global.json en vez de fijar la versión aquí: una sola fuente
           # de verdad para la banda del SDK en todo el repositorio.
@@ -78,7 +78,7 @@ jobs:
 
     steps:
       - name: Descargar el código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # El contexto de build es la raíz del repositorio (el '.' final) porque ambos
       # proyectos referencian DotNetLab.Contracts, que vive fuera de sus carpetas.

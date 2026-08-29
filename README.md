@@ -112,6 +112,10 @@ dotnet test
 
 El repositorio compila con **avisos como errores** y las 31 pruebas deben pasar.
 
+Cada push a `main` dispara el workflow de CI, que además de compilar y pasar las pruebas
+**construye las dos imágenes Docker, valida el compose y arranca la API en un contenedor** para
+comprobar que su endpoint de salud responde.
+
 ---
 
 ## Documentación

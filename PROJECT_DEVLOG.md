@@ -413,10 +413,77 @@ Todo lo siguiente se ejecutó de verdad durante el desarrollo, no se asume:
 Es la validación más cercana al contenedor que se puede hacer sin Docker: el publish en Release con
 trimming es exactamente el paso que ejecuta la etapa `publish` del Dockerfile.
 
-**Pendiente de verificar en una máquina con Docker:** la construcción de las imágenes y
-`docker compose up`. Los `Dockerfile` y el `docker-compose.yml` están escritos y comentados, pero
-Docker no estaba disponible en el entorno de desarrollo, así que **no se han construido ni
-ejecutado**. Es el primer paso a validar.
+---
+
+## Fase 5 · Integración continua (y cierre de la verificación de Docker)
+
+### El problema
+
+Docker no estaba instalado en el entorno de desarrollo, así que los `Dockerfile` y el
+`docker-compose.yml` quedaron escritos pero **sin construir ni ejecutar nunca**. Era el único hueco
+real del entregable, y no se podía cerrar sin instalar Docker en la máquina.
+
+### La solución
+
+Un workflow de GitHub Actions (`.github/workflows/ci.yml`) con dos trabajos en paralelo. Los
+runners de Ubuntu ya traen Docker, así que la verificación que faltaba se hace en CI:
+
+| Trabajo | Qué comprueba |
+|---|---|
+| **Build y tests** | `dotnet build -c Release` (con avisos como errores), las 31 pruebas y `dotnet publish` del frontend, que ejercita el recorte de IL del cliente WebAssembly |
+| **Imágenes Docker** | Construye las dos imágenes, valida `docker compose config`, **arranca la API en un contenedor** y sondea `/api/diagnostics/health` con reintentos |
+
+Decisiones del workflow:
+
+**1. `docker build` directo, sin acciones de terceros.**
+`docker/build-push-action` aportaría caché de capas entre ejecuciones, pero también una dependencia
+externa que versionar y auditar. Con dos imágenes que tardan 87 s en total, la caché no compensa.
+Es la misma lógica que llevó a resolver la sonda a Redis con un socket crudo.
+
+**2. Arrancar el contenedor, no solo construirlo.**
+Que una imagen se construya no demuestra que arranque: un `ENTRYPOINT` mal escrito o un `USER` sin
+permisos sobre `/app` compilan igual de bien. El paso levanta la API y sondea el endpoint de salud
+con reintentos, porque el `HEALTHCHECK` tarda unos segundos en dar su primer veredicto.
+
+**3. Un secreto desechable generado en el runner.**
+`docker compose config` falla si el fichero del secret no existe. En CI se genera con `openssl` y
+muere con el runner: nunca se versiona ni sale de la máquina efímera.
+
+**4. `if: always()` en la limpieza y `if: failure()` en los logs.**
+Los logs del contenedor solo se vuelcan cuando algo falla (en caso de éxito son ruido), pero el
+`docker rm -f` corre siempre, incluso si el sondeo falló.
+
+### Resultado de la primera ejecución
+
+Ambos trabajos en verde a la primera. Build y tests en 63 s, imágenes Docker en 87 s. El contenedor
+de la API respondió esto:
+
+```json
+{"status":"Healthy","environmentName":"Production","runtimeVersion":".NET 10.0.11",
+ "insideContainer":true,"machineName":"11fea8d75bdb",
+ "cache":{"name":"cache","reachable":false,"detail":"Sonda deshabilitada (Cache__Enabled=false)."}}
+```
+
+Las tres cosas que confirma esa respuesta:
+
+- `insideContainer: true` — la variable `DOTNET_RUNNING_IN_CONTAINER` de la imagen oficial está
+  presente, así que el proceso corre dentro del contenedor y no en el runner.
+- `machineName: 11fea8d75bdb` — es el id corto del contenedor, no el nombre del host.
+- `runtimeVersion: .NET 10.0.11` sobre la imagen `aspnet:10.0-alpine`, ejecutando como el usuario
+  `app` sin privilegios.
+
+La sonda a la cache responde "deshabilitada" porque el contenedor se arrancó suelto, sin compose:
+es el comportamiento correcto y, de hecho, valida la corrección del **reto 8** (distinguir
+"dependencia caída" de "dependencia no configurada"): sin cache configurada, el estado es `Healthy`
+y no `Degraded`.
+
+**Aviso resuelto en la segunda iteración:** la primera ejecución avisó de que `actions/checkout@v4`
+y `actions/setup-dotnet@v4` fuerzan Node 24 porque Node 20 está obsoleto. Se subieron a `@v7` y
+`@v6` respectivamente.
+
+**Lo que sigue sin verificarse:** `docker compose up` completo con los tres servicios en marcha.
+CI valida la sintaxis del compose y que cada imagen arranca por separado, pero no la red interna
+`labnet` ni la sonda RESP real contra el contenedor de cache. Eso necesita una máquina con Docker.
 
 ---
 
@@ -438,7 +505,8 @@ esperar que el consumidor liberase hueco.
 
 ## Próximos pasos sugeridos
 
-1. Construir y levantar las imágenes (`docker compose up --build`) y verificar la sonda a la cache.
+1. Levantar el stack completo (`docker compose up --build`) y verificar la sonda RESP contra el
+   contenedor de cache por la red interna: es lo único que CI no cubre.
 2. Publicar en Release con `PublishTrimmed` para medir el tamaño real de la imagen final.
 3. Añadir OpenTelemetry: los endpoints ya emiten logging estructurado con `EventId` estables.
 4. Añadir la variante `noble-chiseled` como perfil alternativo de compose para comparar tamaños.
