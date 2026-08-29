@@ -1,0 +1,129 @@
+# =============================================================================
+# Entorno local completo: Web API + Blazor Web App + contenedor auxiliar (cache).
+#
+#   1) Crea el secreto:  echo "una-clave-larga-y-aleatoria" > secrets/lab_shared_key.txt
+#   2) Levanta todo:     docker compose up --build
+#   3) Abre:             http://localhost:8081
+#
+# Nota: la clave 'version:' ya no se usa; Compose V2 la ignora y avisa si está presente.
+# =============================================================================
+
+# --- Secretos ----------------------------------------------------------------
+# Compose monta cada secret como un fichero de solo lectura en /run/secrets/<nombre>.
+# Ventaja frente a una variable de entorno: NO aparece en 'docker inspect', ni en los logs
+# del orquestador, ni queda grabado en ninguna capa de la imagen.
+secrets:
+  lab_shared_key:
+    # El fichero está fuera del control de versiones (ver .gitignore): cada desarrollador
+    # genera el suyo, y en producción lo sustituye el gestor de secretos de la plataforma.
+    file: ./secrets/lab_shared_key.txt
+
+# --- Redes -------------------------------------------------------------------
+networks:
+  labnet:
+    # Bridge definido por el usuario: aporta DNS interno, de modo que 'api' y 'cache'
+    # se resuelven por el NOMBRE del servicio. La red bridge por defecto no lo hace.
+    driver: bridge
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Contenedor auxiliar: cache en memoria. La API le hace PING por TCP hablando RESP
+  # a pelo, sin librería cliente, para demostrar la comunicación entre contenedores.
+  # ---------------------------------------------------------------------------
+  cache:
+    image: redis:7-alpine
+    # Nombre fijo para reconocerlo en 'docker ps' sin el prefijo del proyecto.
+    container_name: dotnetlab-cache
+    # SIN 'ports': el servicio solo es accesible desde la red interna. Publicar el 6379
+    # en el host sería exponer una base de datos sin autenticación a toda la LAN.
+    networks:
+      - labnet
+    healthcheck:
+      # redis-cli sí está dentro de esta imagen, así que la sonda usa su propio cliente.
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # unless-stopped: sobrevive a reinicios del demonio, pero respeta un 'docker stop' manual.
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Web API (Minimal APIs). Es quien ejecuta todas las demostraciones.
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      # Contexto = raíz del repositorio: la API referencia a DotNetLab.Contracts,
+      # que está fuera de su propia carpeta.
+      context: .
+      dockerfile: src/DotNetLab.Api/Dockerfile
+    container_name: dotnetlab-api
+    environment:
+      # Configuración NO sensible: visible en 'docker inspect', y está bien que lo sea.
+      # El separador '__' es como ASP.NET Core mapea variables a claves jerárquicas:
+      # Cache__Host equivale a la clave "Cache:Host" de appsettings.json.
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Cache__Host=cache
+      - Cache__Port=6379
+      - Cache__Enabled=true
+      # El sufijo __0 rellena el primer elemento de un array de configuración.
+      - Cors__AllowedOrigins__0=http://localhost:8081
+      # La app recibe la RUTA del secreto, nunca su valor.
+      - SharedKey__File=/run/secrets/lab_shared_key
+    secrets:
+      # Monta el secreto declarado arriba en /run/secrets/lab_shared_key.
+      - lab_shared_key
+    ports:
+      # Publicado solo para poder inspeccionar el JSON crudo desde el host durante el
+      # aprendizaje. En un despliegue real, la API no se expondría: solo el frontend.
+      - "8080:8080"
+    networks:
+      - labnet
+    depends_on:
+      cache:
+        # service_healthy y no el simple 'depends_on': espera a que el healthcheck de la
+        # cache pase, no solo a que el contenedor arranque.
+        condition: service_healthy
+    restart: unless-stopped
+    # Límites de recursos: los endpoints de rendimiento reservan MBs por llamada, así que
+    # acotar la memoria evita que un bucle de peticiones afecte al resto de la máquina.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Blazor Web App: sirve el portal y hace de proxy hacia la API.
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: src/DotNetLab.Web/Dockerfile
+    container_name: dotnetlab-web
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      # 'api' es el nombre del servicio: lo resuelve el DNS interno de la red labnet.
+      # El puerto es el INTERNO del contenedor (8080), no el publicado en el host.
+      - Api__BaseUrl=http://api:8080
+      # El mismo secreto que valida la API: el proxy lo añade como cabecera en el servidor,
+      # de modo que el navegador nunca llega a verlo.
+      - Api__SharedKeyFile=/run/secrets/lab_shared_key
+    secrets:
+      - lab_shared_key
+    ports:
+      # Único puerto que un usuario necesita abrir: el portal.
+      - "8081:8080"
+    networks:
+      - labnet
+    depends_on:
+      api:
+        # El frontend arranca cuando la API responde a su healthcheck, para que la primera
+        # visita no se encuentre con errores de conexión durante el prerender en servidor.
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 384M
