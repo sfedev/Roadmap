@@ -1,0 +1,36 @@
+@* Bloque de código con resaltado de sintaxis calculado en C#, sin librerías JS. *@
+
+<div class="snippet">
+    @* Barra superior: identifica el lenguaje y el archivo real del que sale el fragmento. *@
+    <div class="snippet-bar">
+        <span class="snippet-lang">@Language</span>
+        @* Render condicional: si no se indica origen, no se pinta el hueco vacío. *@
+        @if (!string.IsNullOrWhiteSpace(Source))
+        {
+            <span class="snippet-source">@Source</span>
+        }
+    </div>
+
+    @* <pre> conserva saltos y espacios; el scroll horizontal lo gestiona la clase CSS. *@
+    <pre class="snippet-code"><code>@_highlighted</code></pre>
+</div>
+
+@code {
+    // Código fuente a mostrar. EditorRequired hace que el compilador avise si falta.
+    [Parameter, EditorRequired] public string Code { get; set; } = string.Empty;
+
+    // Ruta o nombre del archivo del que procede el fragmento; puramente informativo.
+    [Parameter] public string? Source { get; set; }
+
+    // Etiqueta del lenguaje mostrada en la barra. El resaltador está afinado para C#, pero
+    // Dockerfile y YAML comparten suficiente léxico (comentarios, cadenas, números) como para
+    // que el mismo tokenizador siga siendo útil.
+    [Parameter] public string Language { get; set; } = "C#";
+
+    // HTML ya resaltado. Se cachea en un campo para no re-tokenizar en cada render.
+    private MarkupString _highlighted;
+
+    // OnParametersSet corre cuando el padre cambia los parámetros, no en cada render:
+    // es el punto correcto para trabajo derivado de los parámetros.
+    protected override void OnParametersSet() => _highlighted = CSharpHighlighter.Highlight(Code);
+}

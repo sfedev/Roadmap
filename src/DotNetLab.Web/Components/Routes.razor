@@ -1,0 +1,17 @@
+@* Router de la aplicación. Escanea los ensamblados en busca de componentes con @@page. *@
+
+@* AppAssembly: el ensamblado del HOST, donde vive la portada (render estático).
+   AdditionalAssemblies: el ensamblado CLIENTE, donde viven las páginas interactivas; sin
+   esta línea el router no encontraría /modern-dotnet ni /docker.
+   NotFoundPage: página que se renderiza cuando ninguna ruta coincide, en lugar de un 404 seco. *@
+<Router AppAssembly="typeof(Program).Assembly"
+        AdditionalAssemblies="new[] { typeof(Client._Imports).Assembly }"
+        NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        @* RouteView instancia el componente de la ruta con el layout indicado. *@
+        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
+        @* Mueve el foco al <h1> tras navegar: sin esto, un lector de pantalla se quedaría
+           anclado al enlace anterior y no anunciaría la página nueva. *@
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

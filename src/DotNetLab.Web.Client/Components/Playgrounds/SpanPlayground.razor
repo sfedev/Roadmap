@@ -1,0 +1,108 @@
+@* Playground de Span<T>: lanza la comparativa real contra la API y pinta las métricas. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-controls">
+        <label class="field">
+            <span class="field-label">Filas a parsear: <strong>@_rows.ToString("N0")</strong></span>
+            @* @bind con :event="oninput" actualiza mientras se arrastra, no al soltar. *@
+            <input type="range" min="1000" max="150000" step="1000"
+                   @bind="_rows" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        @* disabled ligado a _busy: impide encolar peticiones con doble clic. *@
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            @(_busy ? "Midiendo…" : "Ejecutar comparativa")
+        </button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_result is { } r)
+    {
+        <p class="verdict">@r.Verdict</p>
+
+        <div class="metrics">
+            @* Cada fila compara la MISMA métrica entre las dos estrategias. *@
+            <MetricRow Label="Memoria asignada (Heap)"
+                       SpanText="@FormatBytes(r.Span.AllocatedBytes)"
+                       NaiveText="@FormatBytes(r.Naive.AllocatedBytes)"
+                       SpanRatio="@Ratio(r.Span.AllocatedBytes, r.Naive.AllocatedBytes)" />
+
+            <MetricRow Label="Tiempo de parseo"
+                       SpanText="@($"{r.Span.ElapsedMicroseconds:N0} µs")"
+                       NaiveText="@($"{r.Naive.ElapsedMicroseconds:N0} µs")"
+                       SpanRatio="@Ratio(r.Span.ElapsedMicroseconds, r.Naive.ElapsedMicroseconds)" />
+
+            <MetricRow Label="Recolecciones Gen0"
+                       SpanText="@r.Span.Gen0Collections.ToString()"
+                       NaiveText="@r.Naive.Gen0Collections.ToString()"
+                       SpanRatio="@Ratio(r.Span.Gen0Collections, r.Naive.Gen0Collections)" />
+        </div>
+
+        @* Prueba de que ambas rutas hicieron el mismo trabajo: si la media difiere, el
+           benchmark no vale y hay que desconfiar de los tiempos. *@
+        <p class="pg-note">
+            Ambas estrategias leyeron <strong>@r.Span.RowsParsed.ToString("N0")</strong> filas
+            (@((r.PayloadChars / 1024.0 / 1024.0).ToString("F2")) MB de texto) con la misma media:
+            <strong>@r.Span.AverageValue</strong> vs <strong>@r.Naive.AverageValue</strong>.
+        </p>
+    }
+</div>
+
+@code {
+    // Tamaño del lote; 25.000 filas dan una diferencia clara sin castigar al contenedor.
+    private int _rows = 25_000;
+
+    // Bloquea los controles mientras hay una petición en vuelo.
+    private bool _busy;
+
+    // Último resultado recibido; null mientras no se haya ejecutado nada.
+    private SpanDemoResponse? _result;
+
+    // Mensaje de error legible; se limpia en cada ejecución nueva.
+    private string? _error;
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _result = await Api.GetSpanDemoAsync(_rows);
+        }
+        // Solo se capturan los fallos esperables de red/serialización: cualquier otra excepción
+        // es un bug y debe propagarse hasta el ErrorBoundary en vez de silenciarse aquí.
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        catch (TaskCanceledException)
+        {
+            _error = "La petición superó el tiempo de espera.";
+        }
+        finally
+        {
+            // finally garantiza que el botón se reactiva aunque la llamada falle.
+            _busy = false;
+        }
+    }
+
+    // Formatea bytes a la unidad legible más cercana; 0 se muestra tal cual para que destaque.
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        0 => "0 B",
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+        _ => $"{bytes / 1024.0 / 1024.0:F2} MB"
+    };
+
+    // Proporción de la barra de la estrategia span respecto a la peor de las dos (0..1).
+    private static double Ratio(double span, double naive)
+        // Si la peor métrica es 0 no hay nada que comparar: barra vacía en vez de dividir por cero.
+        => naive <= 0 ? 0 : Math.Clamp(span / naive, 0, 1);
+}

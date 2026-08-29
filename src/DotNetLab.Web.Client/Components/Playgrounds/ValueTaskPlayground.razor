@@ -1,0 +1,123 @@
+@* Playground de ValueTask: la primera llamada calcula (ruta async) y la segunda con los mismos
+   parámetros sale de caché (ruta síncrona). El campo "modo" del backend lo delata. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-grid">
+        <label class="field">
+            <span class="field-label">Eventos a procesar: <strong>@_events.ToString("N0")</strong></span>
+            <input type="range" min="1000" max="50000" step="1000"
+                   @bind="_events" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            <span class="field-label">Capacidad del canal: <strong>@_capacity</strong></span>
+            <input type="range" min="1" max="64" step="1"
+                   @bind="_capacity" @bind:event="oninput" disabled="@_busy" />
+        </label>
+    </div>
+
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            @(_busy ? "Ejecutando…" : "Llamar al endpoint")
+        </button>
+        <button class="btn" @onclick="Reset" disabled="@(_busy || _runs.Count == 0)">Limpiar historial</button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_runs.Count > 0)
+    {
+        <p class="pg-note">
+            Pulsa dos veces sin tocar los sliders: la segunda llamada devuelve el resultado cacheado
+            por la ruta síncrona de <code>ValueTask</code>, sin asignar un <code>Task</code>.
+        </p>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Modo</th>
+                    <th>Producidos</th>
+                    <th>Consumidos</th>
+                    <th>Esperas</th>
+                    <th>Duración</th>
+                    <th>Ida y vuelta</th>
+                </tr>
+            </thead>
+            <tbody>
+                @* Se recorre al revés para que la ejecución más reciente quede arriba. *@
+                @foreach (var run in Enumerable.Reverse(_runs))
+                {
+                    <tr @key="run.Index">
+                        <td>@run.Index</td>
+                        <td>
+                            @* El texto viene del backend: "cacheado" indica que no hubo cálculo. *@
+                            <span class="chip @(run.Summary.FullMode.Contains("cacheado") ? "chip-good" : "chip-neutral")">
+                                @run.Summary.FullMode
+                            </span>
+                        </td>
+                        <td>@run.Summary.Produced.ToString("N0")</td>
+                        <td>@run.Summary.Consumed.ToString("N0")</td>
+                        <td>@run.Summary.BackpressureWaits.ToString("N0")</td>
+                        <td>@run.Summary.TotalMs.ToString("F2") ms</td>
+                        @* Tiempo medido en el navegador: incluye red y serialización. *@
+                        <td>@run.RoundTripMs.ToString("F0") ms</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    // Registro de una ejecución: lo que devolvió el servidor más lo que midió el cliente.
+    private sealed record Run(int Index, ChannelSummary Summary, double RoundTripMs);
+
+    private int _events = 20_000;
+    private int _capacity = 8;
+
+    private bool _busy;
+    private string? _error;
+
+    // Historial de llamadas para poder comparar la primera con las siguientes.
+    private readonly List<Run> _runs = [];
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        // Reloj del navegador: en WASM, Stopwatch se apoya en performance.now().
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        try
+        {
+            var summary = await Api.GetChannelSummaryAsync(_events, _capacity);
+
+            // Respuesta vacía = contrato roto; se informa en vez de meter un null en la tabla.
+            if (summary is null)
+            {
+                _error = "La API devolvió una respuesta vacía.";
+                return;
+            }
+
+            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            _runs.Add(new Run(_runs.Count + 1, summary, elapsed));
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Vacía el historial sin tocar la caché del servidor (esa se invalida cambiando parámetros).
+    private void Reset() => _runs.Clear();
+}

@@ -1,0 +1,73 @@
+@* Portada. Sin @rendermode: se sirve como HTML estático desde el servidor, sin circuito
+   SignalR ni descarga de WASM. Es la página más rápida posible y no necesita interactividad. *@
+@page "/"
+
+<PageTitle>DotNetLab · Fase 01</PageTitle>
+
+<header class="hero">
+    <p class="eyebrow">Portal interactivo de aprendizaje</p>
+    <h1>Cómo funcionan por dentro las tecnologías de la Fase 01</h1>
+    <p class="lede">
+        Dos módulos, siete conceptos y una Web API real que ejecuta cada demostración. Nada de
+        resultados simulados: los números que verás salen de medir el proceso del servidor mientras
+        atiende tu petición.
+    </p>
+
+    <div class="hero-actions">
+        <a class="btn btn-primary" href="modern-dotnet">Empezar por Modern .NET y C#</a>
+        <a class="btn" href="docker">Ir a Docker en producción</a>
+    </div>
+</header>
+
+<section class="panel">
+    <h2>Qué vas a encontrar</h2>
+
+    <div class="pg-grid">
+        <article class="mini-card">
+            <h3>Módulo 1 · Modern .NET y C#</h3>
+            <p>
+                <code>Span&lt;T&gt;</code>, records, primary constructors, pattern matching avanzado,
+                <code>System.Threading.Channels</code>, <code>ValueTask</code> y Keyed Services.
+                Cada tarjeta trae teoría, un playground que llama a la API y el código real que lo implementa.
+            </p>
+        </article>
+
+        <article class="mini-card">
+            <h3>Módulo 2 · Docker en producción</h3>
+            <p>
+                El <code>Dockerfile</code> multi-stage de este repositorio explicado etapa por etapa,
+                la comparación entre Alpine y Chiseled/Distroless, y cómo se gestionan
+                <code>.dockerignore</code>, variables de entorno y secrets.
+            </p>
+        </article>
+
+        <article class="mini-card">
+            <h3>Arquitectura</h3>
+            <p>
+                Blazor Web App con render mode <strong>Auto</strong> sobre una Web API de Minimal APIs.
+                El host Blazor hace de proxy hacia la API: el navegador nunca ve su URL interna ni la
+                clave compartida.
+            </p>
+        </article>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>Cómo leer los números</h2>
+    <ul class="bullets">
+        <li>
+            <strong>Bytes asignados:</strong> se miden con
+            <code>GC.GetAllocatedBytesForCurrentThread()</code>, que cuenta solo el hilo que atiende
+            la petición y aísla la medida del ruido de otras llamadas.
+        </li>
+        <li>
+            <strong>Tiempo:</strong> <code>Stopwatch.GetTimestamp()</code> monotónico, en microsegundos.
+            Antes de medir se ejecuta un calentamiento para que el coste de compilación JIT no se
+            impute a la primera estrategia.
+        </li>
+        <li>
+            <strong>Gen0:</strong> número de recolecciones de la generación 0 provocadas por la
+            operación. Es la métrica que traduce "asigné memoria" a "el GC tuvo que trabajar".
+        </li>
+    </ul>
+</section>

@@ -1,0 +1,83 @@
+@* Playground de Keyed Services: la clave elegida decide qué implementación resuelve el
+   contenedor, y el resultado muestra el tipo CLR concreto que ejecutó el trabajo. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-controls">
+        @* Los botones representan las claves registradas en el contenedor del backend. *@
+        @foreach (var key in Keys)
+        {
+            <button type="button"
+                    class="btn @(key == _selectedKey ? "btn-primary" : null)"
+                    @onclick="() => SelectAsync(key)"
+                    disabled="@_busy">
+                @key
+            </button>
+        }
+        @* Clave inexistente: comprueba que la fábrica responde 400 y no revienta con un 500. *@
+        <button type="button" class="btn btn-ghost" @onclick="@(() => SelectAsync("inexistente"))" disabled="@_busy">
+            probar clave inválida
+        </button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_result is { } r)
+    {
+        <div class="kv">
+            <div class="kv-row"><span>Clave solicitada</span><code>@r.RequestedKey</code></div>
+            @* El nombre del tipo prueba que la clave, y no un if, eligió la implementación. *@
+            <div class="kv-row"><span>Tipo resuelto</span><code>@r.ResolvedImplementation</code></div>
+            <div class="kv-row"><span>Estrategia</span><span>@r.StrategyDescription</span></div>
+            <div class="kv-row"><span>Claves registradas</span><code>@string.Join(" · ", r.AvailableKeys)</code></div>
+        </div>
+
+        <div class="chips">
+            <span class="chip chip-neutral">@r.Execution.RowsParsed.ToString("N0") filas</span>
+            <span class="chip chip-neutral">@r.Execution.ElapsedMicroseconds.ToString("N0") µs</span>
+            @* Los bytes asignados delatan cuál de las dos implementaciones se ejecutó de verdad. *@
+            <span class="chip @(r.Execution.AllocatedBytes == 0 ? "chip-good" : "chip-bad")">
+                @r.Execution.AllocatedBytes.ToString("N0") bytes en Heap
+            </span>
+        </div>
+    }
+</div>
+
+@code {
+    // Claves conocidas por la UI; el backend valida igualmente contra su propia lista blanca.
+    private static readonly string[] Keys = ["span", "naive"];
+
+    private string _selectedKey = "span";
+    private bool _busy;
+    private KeyedServiceResponse? _result;
+    private string? _error;
+
+    // OnInitializedAsync se ejecuta al montar el componente: la tarjeta ya muestra datos
+    // sin obligar al usuario a pulsar nada.
+    protected override Task OnInitializedAsync() => SelectAsync(_selectedKey);
+
+    private async Task SelectAsync(string key)
+    {
+        _selectedKey = key;
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _result = await Api.GetKeyedServiceAsync(key, rows: 5_000);
+        }
+        catch (HttpRequestException ex)
+        {
+            // Con una clave no registrada el backend responde 400: el mensaje se muestra tal cual.
+            _error = $"La API rechazó la clave '{key}'. {ex.Message}";
+            _result = null;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

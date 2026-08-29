@@ -1,0 +1,86 @@
+@* Contenedor visual de un concepto: teoría + playground + snippet.
+   No sabe NADA del playground concreto: lo recibe como RenderFragment, así que añadir
+   una tarjeta nueva no obliga a tocar este componente. *@
+
+@* El id ancla permite enlazar directamente a la tarjeta desde el índice lateral. *@
+<article class="card" id="@Concept.Id">
+
+    <header class="card-head">
+        @* aria-hidden: el emoji es decorativo, un lector de pantalla no debe leerlo. *@
+        <span class="card-icon" aria-hidden="true">@Concept.Icon</span>
+        <div>
+            <h3 class="card-title">@Concept.Title</h3>
+            <p class="card-tagline">@Concept.Tagline</p>
+        </div>
+        @* Endpoint que ejecuta el playground: hace explícito qué se está llamando de verdad. *@
+        <code class="card-endpoint">@Concept.Endpoint</code>
+    </header>
+
+    @* Pestañas sin JavaScript: el estado vive en un campo del componente. *@
+    <nav class="tabs" role="tablist">
+        @* La lambda captura 'tab', que en C# es una variable NUEVA por iteración del foreach:
+           por eso cada botón conserva su propio valor y no el último del bucle. *@
+        @foreach (var tab in Tabs)
+        {
+            <button type="button"
+                    role="tab"
+                    class="tab @(tab == _activeTab ? "tab-active" : null)"
+                    aria-selected="@(tab == _activeTab ? "true" : "false")"
+                    @onclick="() => _activeTab = tab">
+                @tab
+            </button>
+        }
+    </nav>
+
+    <div class="tab-body">
+        @* Se renderiza solo la pestaña activa: menos nodos en el DOM y menos trabajo de diff. *@
+        @switch (_activeTab)
+        {
+            case "Teoría":
+                <section class="theory">
+                    <h4>¿Qué es?</h4>
+                    <p>@Concept.WhatIsIt</p>
+
+                    <h4>¿Cómo funciona por dentro?</h4>
+                    <p>@Concept.HowItWorks</p>
+
+                    <h4>¿Cuándo usarlo?</h4>
+                    <p>@Concept.WhenToUse</p>
+
+                    @* Nota destacada sobre memoria: es el hilo conductor de todo el módulo. *@
+                    <aside class="memory-note">
+                        <strong>Memoria:</strong> @Concept.MemoryNote
+                    </aside>
+                </section>
+                break;
+
+            case "Playground":
+                <section class="playground">
+                    @* Aquí se inyecta el playground concreto que pasó la página. *@
+                    @Playground
+                </section>
+                break;
+
+            case "Código":
+                <CodeSnippet Code="@Concept.Snippet" Source="@SnippetSource" />
+                break;
+        }
+    </div>
+</article>
+
+@code {
+    // Ficha teórica que pinta la tarjeta.
+    [Parameter, EditorRequired] public Concept Concept { get; set; } = default!;
+
+    // Playground interactivo específico de este concepto.
+    [Parameter, EditorRequired] public RenderFragment Playground { get; set; } = default!;
+
+    // Archivo del backend del que procede el snippet, mostrado en la barra del bloque.
+    [Parameter] public string? SnippetSource { get; set; }
+
+    // Nombres de las pestañas. static readonly: se comparte entre todas las instancias.
+    private static readonly string[] Tabs = ["Teoría", "Playground", "Código"];
+
+    // Pestaña visible. Arranca en Teoría porque el orden pedagógico es entender y luego ejecutar.
+    private string _activeTab = "Teoría";
+}

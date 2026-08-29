@@ -1,0 +1,92 @@
+@* Sección 1 del portal: Modern .NET y C#. Vive en el proyecto CLIENTE para que el modo
+   de render Auto pueda ejecutarla en WebAssembly una vez descargado el runtime. *@
+@page "/modern-dotnet"
+
+@* InteractiveAuto: la PRIMERA visita se renderiza en el servidor sobre un circuito SignalR
+   (interactividad inmediata, sin esperar la descarga del runtime); en paralelo el navegador
+   baja el runtime WASM y las visitas siguientes se ejecutan íntegras en el cliente. *@
+@rendermode InteractiveAuto
+
+<PageTitle>Modern .NET y C# · DotNetLab</PageTitle>
+
+<header class="page-head">
+    <p class="eyebrow">Fase 01 · Módulo 1</p>
+    <h1>Modern .NET y C#</h1>
+    <p class="lede">
+        Siete conceptos que separan el código que funciona del código que además no castiga al
+        recolector de basura. Cada tarjeta explica la teoría, ejecuta el concepto contra la Web API
+        real y muestra el código de producción que lo implementa.
+    </p>
+
+    @* Indicador del modo de ejecución: hace tangible qué significa "Auto". *@
+    <p class="runtime-badge">
+        Este componente se está ejecutando en <strong>@RuntimeLocation</strong>.
+    </p>
+</header>
+
+@* Índice lateral: navega a las anclas de las tarjetas sin recargar la página. *@
+<nav class="toc" aria-label="Índice de conceptos">
+    @foreach (var concept in ConceptCatalog.All)
+    {
+        <a class="toc-link" href="#@concept.Id">
+            <span aria-hidden="true">@concept.Icon</span> @concept.Title
+        </a>
+    }
+</nav>
+
+<div class="cards">
+    @* Cada tarjeta recibe su ficha y su playground. El 'switch' asocia concepto y componente
+       en un único punto: añadir un concepto nuevo es añadir un case aquí. *@
+    @foreach (var concept in ConceptCatalog.All)
+    {
+        <ConceptCard Concept="concept" SnippetSource="@SourceFileFor(concept.Id)" @key="concept.Id">
+            <Playground>
+                @switch (concept.Id)
+                {
+                    case ConceptCatalog.Span:
+                        <SpanPlayground />
+                        break;
+                    case ConceptCatalog.Records:
+                        <RecordsPlayground />
+                        break;
+                    case ConceptCatalog.PrimaryConstructors:
+                        <LifetimesPlayground />
+                        break;
+                    case ConceptCatalog.PatternMatching:
+                        <PatternPlayground />
+                        break;
+                    case ConceptCatalog.Channels:
+                        <ChannelPlayground />
+                        break;
+                    case ConceptCatalog.ValueTasks:
+                        <ValueTaskPlayground />
+                        break;
+                    case ConceptCatalog.KeyedServices:
+                        <KeyedServicesPlayground />
+                        break;
+                }
+            </Playground>
+        </ConceptCard>
+    }
+</div>
+
+@code {
+    // OperatingSystem.IsBrowser() es una comprobación que el compilador resuelve por plataforma:
+    // devuelve true solo cuando el ensamblado corre sobre WebAssembly.
+    private static string RuntimeLocation =>
+        OperatingSystem.IsBrowser() ? "WebAssembly (navegador)" : "el servidor (circuito SignalR)";
+
+    // Archivo del backend del que sale cada snippet; se muestra en la barra del bloque de código
+    // para que el lector pueda abrirlo en el repositorio.
+    private static string SourceFileFor(string conceptId) => conceptId switch
+    {
+        ConceptCatalog.Span => "src/DotNetLab.Api/Services/SpanTelemetryParser.cs",
+        ConceptCatalog.Records => "src/DotNetLab.Api/Services/LanguageShowcaseService.cs",
+        ConceptCatalog.PrimaryConstructors => "src/DotNetLab.Api/Services/LifetimeProbes.cs",
+        ConceptCatalog.PatternMatching => "src/DotNetLab.Api/Services/LanguageShowcaseService.cs",
+        ConceptCatalog.Channels => "src/DotNetLab.Api/Services/ChannelPipelineService.cs",
+        ConceptCatalog.ValueTasks => "src/DotNetLab.Api/Services/ChannelPipelineService.cs",
+        ConceptCatalog.KeyedServices => "src/DotNetLab.Api/Program.cs",
+        _ => "src/DotNetLab.Api"
+    };
+}

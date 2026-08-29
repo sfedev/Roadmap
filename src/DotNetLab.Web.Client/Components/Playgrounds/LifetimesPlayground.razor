@@ -1,0 +1,102 @@
+@* Playground de lifetimes: dos resoluciones de cada servicio DENTRO de la misma petición.
+   Los servicios implicados están escritos con primary constructors. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            @(_busy ? "Resolviendo…" : "Resolver servicios")
+        </button>
+        <span class="pg-note">Púlsalo dos veces: solo el Scoped cambia entre peticiones.</span>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_result is { } r)
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Lifetime</th>
+                    <th>1.ª resolución</th>
+                    <th>2.ª resolución</th>
+                    <th>¿Misma instancia?</th>
+                </tr>
+            </thead>
+            <tbody>
+                @* Las tres filas se construyen desde una tupla local: mismo marcado, distinto dato. *@
+                @foreach (var (first, second) in new[]
+                {
+                    (r.SingletonFirst, r.SingletonSecond),
+                    (r.ScopedFirst, r.ScopedSecond),
+                    (r.TransientFirst, r.TransientSecond)
+                })
+                {
+                    <tr @key="first.Lifetime">
+                        <td><strong>@first.Lifetime</strong></td>
+                        <td><code>@first.InstanceId</code></td>
+                        <td><code>@second.InstanceId</code></td>
+                        <td>
+                            @* La comparación de ids es la prueba directa del comportamiento del contenedor. *@
+                            <span class="chip @(first.InstanceId == second.InstanceId ? "chip-good" : "chip-neutral")">
+                                @(first.InstanceId == second.InstanceId ? "sí" : "no")
+                            </span>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="kv">
+            @* El id de petición cambia en cada clic: por eso el Scoped también cambia. *@
+            <div class="kv-row"><span>Petición HTTP</span><code>@r.RequestId</code></div>
+        </div>
+
+        <p class="pg-note">@r.Insight</p>
+
+        @if (_previousScopedId is { } previous)
+        {
+            <p class="pg-note">
+                Scoped de la ejecución anterior: <code>@previous</code> →
+                ahora <code>@r.ScopedFirst.InstanceId</code>.
+                @(previous == r.ScopedFirst.InstanceId
+                    ? "Coinciden: no se creó un scope nuevo."
+                    : "Distintos: cada petición HTTP abre su propio scope.")
+            </p>
+        }
+    }
+</div>
+
+@code {
+    private bool _busy;
+    private LifetimesDemoResponse? _result;
+    private string? _error;
+
+    // Id scoped de la ejecución ANTERIOR: permite comparar entre peticiones, no solo dentro de una.
+    private string? _previousScopedId;
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        // Se guarda antes de sobrescribir _result para poder comparar después.
+        _previousScopedId = _result?.ScopedFirst.InstanceId;
+
+        try
+        {
+            _result = await Api.GetLifetimesAsync();
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -1,0 +1,481 @@
+/* =============================================================================
+   DotNetLab — hoja de estilos única, sin frameworks ni CDN.
+   Motivo: el portal debe funcionar offline y dentro de un contenedor aislado,
+   así que no puede depender de recursos externos (ni de una CSP permisiva).
+   ========================================================================== */
+
+/* Tokens de diseño: cambiar el tema es cambiar estas variables, no las reglas. */
+:root {
+    --bg: #0b1020;
+    --bg-soft: #121a30;
+    --surface: #161f38;
+    --surface-2: #1d2846;
+    --border: #26324f;
+    --text: #e6ecff;
+    --text-dim: #9fb0d4;
+    --accent: #5b9dff;
+    --accent-soft: rgba(91, 157, 255, 0.14);
+    --good: #3ddc97;
+    --bad: #ff6b6b;
+    --warn: #ffb84d;
+    --radius: 14px;
+    --radius-sm: 8px;
+    /* Escala tipográfica basada en la fuente del sistema: cero descargas de fuentes. */
+    --font: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, "SFMono-Regular", monospace;
+}
+
+/* Modo claro automático: respeta la preferencia del sistema operativo. */
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #f4f6fc;
+        --bg-soft: #ffffff;
+        --surface: #ffffff;
+        --surface-2: #eef2fb;
+        --border: #d9e0f0;
+        --text: #101728;
+        --text-dim: #5a6784;
+        --accent: #2563eb;
+        --accent-soft: rgba(37, 99, 235, 0.1);
+    }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    /* Suaviza el render de texto en pantallas de alta densidad. */
+    -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre { font-family: var(--mono); font-size: 0.88rem; }
+
+/* ------------------------------- Estructura ------------------------------ */
+
+.shell { min-height: 100vh; display: flex; flex-direction: column; }
+
+.content {
+    /* Ancho máximo de lectura: más de ~1100px cansa la vista en texto técnico. */
+    width: min(1100px, 100% - 2.5rem);
+    margin: 0 auto;
+    padding: 2rem 0 4rem;
+    flex: 1;
+}
+
+/* ------------------------------ Navegación ------------------------------- */
+
+.nav {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    padding: 0.9rem clamp(1.25rem, 4vw, 3rem);
+    background: var(--bg-soft);
+    border-bottom: 1px solid var(--border);
+    /* Sticky: el índice de navegación acompaña al scroll en páginas largas. */
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; color: var(--text); }
+.brand:hover { text-decoration: none; }
+.brand-mark { color: var(--accent); }
+
+.nav-links { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+
+.nav-link {
+    padding: 0.4rem 0.8rem;
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    font-size: 0.94rem;
+}
+
+.nav-link:hover { background: var(--surface); color: var(--text); text-decoration: none; }
+
+/* NavLink añade .active automáticamente cuando la ruta coincide. */
+.nav-link.active { background: var(--accent-soft); color: var(--accent); }
+
+.footer {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding: 1.5rem clamp(1.25rem, 4vw, 3rem);
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+
+/* -------------------------------- Cabeceras ------------------------------ */
+
+.hero, .page-head { padding: 2.5rem 0 1.5rem; }
+
+.eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.75rem;
+    color: var(--accent);
+    margin: 0 0 0.5rem;
+}
+
+h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); line-height: 1.2; margin: 0 0 0.75rem; }
+h2 { font-size: 1.35rem; margin: 0 0 0.75rem; }
+h3 { font-size: 1.05rem; margin: 0 0 0.4rem; }
+h4 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin: 1.2rem 0 0.3rem; }
+
+.lede { color: var(--text-dim); font-size: 1.05rem; max-width: 70ch; margin: 0 0 1.25rem; }
+
+.hero-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+
+.runtime-badge {
+    display: inline-block;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+/* --------------------------------- Paneles ------------------------------- */
+
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.mini-card {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+}
+
+.mini-card h3 { color: var(--accent); }
+.mini-card p { color: var(--text-dim); margin: 0; font-size: 0.92rem; }
+
+.bullets { color: var(--text-dim); padding-left: 1.1rem; margin: 0.5rem 0 0; }
+.bullets li { margin-bottom: 0.35rem; font-size: 0.9rem; }
+
+/* ---------------------------- Índice de conceptos ------------------------ */
+
+.toc { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+
+.toc-link {
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+
+.toc-link:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+
+/* ------------------------------- Tarjetas -------------------------------- */
+
+.cards { display: flex; flex-direction: column; gap: 1.5rem; }
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    /* scroll-margin evita que la barra sticky tape el título al saltar a un ancla. */
+    scroll-margin-top: 5rem;
+}
+
+.card-head {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+    background: var(--bg-soft);
+    border-bottom: 1px solid var(--border);
+}
+
+.card-icon { font-size: 1.6rem; }
+.card-title { margin: 0; }
+.card-tagline { margin: 0; color: var(--text-dim); font-size: 0.92rem; }
+
+.card-endpoint {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.3rem 0.6rem;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+/* --------------------------------- Tabs ---------------------------------- */
+
+.tabs { display: flex; gap: 0.25rem; padding: 0.75rem 1.5rem 0; border-bottom: 1px solid var(--border); }
+
+.tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.5rem 0.9rem;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.92rem;
+    cursor: pointer;
+}
+
+.tab:hover { color: var(--text); }
+.tab-active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-body { padding: 1.25rem 1.5rem 1.5rem; }
+
+.theory p { color: var(--text-dim); max-width: 78ch; margin: 0; }
+
+.memory-note {
+    margin-top: 1.25rem;
+    padding: 0.85rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: 0.9rem;
+}
+
+/* ------------------------------- Controles ------------------------------- */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.92rem;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover:not(:disabled) { border-color: var(--accent); text-decoration: none; }
+
+/* El estado deshabilitado debe ser evidente: evita clics repetidos durante una llamada. */
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #04122b; font-weight: 600; }
+.btn-ghost { background: none; color: var(--text-dim); }
+
+.pg { display: flex; flex-direction: column; gap: 1rem; }
+.pg-controls { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.pg-note { color: var(--text-dim); font-size: 0.85rem; margin: 0; }
+
+/* Rejilla fluida: las columnas se ajustan solas sin media queries. */
+.pg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+
+.field { display: flex; flex-direction: column; gap: 0.35rem; }
+.field-label { font-size: 0.85rem; color: var(--text-dim); }
+
+.field input[type="range"] { accent-color: var(--accent); width: 100%; }
+
+.field input[type="text"] {
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+}
+
+/* -------------------------------- Métricas ------------------------------- */
+
+.verdict { font-size: 1.05rem; font-weight: 600; margin: 0; }
+
+.verdict-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+
+.metrics { display: flex; flex-direction: column; gap: 1rem; }
+.metric-label { font-size: 0.85rem; color: var(--text-dim); }
+.metric-bars { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.35rem; }
+
+.bar-row { display: grid; grid-template-columns: 3.5rem 1fr 7rem; align-items: center; gap: 0.6rem; }
+
+.bar-tag { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.bar-tag-good { color: var(--good); }
+.bar-tag-bad { color: var(--bad); }
+
+.bar-track { height: 10px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+
+/* La transición hace visible el cambio entre ejecuciones sucesivas. */
+.bar-fill { height: 100%; border-radius: 999px; transition: width 0.35s ease; }
+.bar-fill-good { background: var(--good); }
+.bar-fill-bad { background: var(--bad); }
+
+.bar-value { font-family: var(--mono); font-size: 0.8rem; text-align: right; color: var(--text-dim); }
+
+/* ------------------------------ Clave/valor ------------------------------ */
+
+.kv { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.kv-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 220px) 1fr;
+    gap: 1rem;
+    padding: 0.5rem 0.7rem;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    font-size: 0.88rem;
+}
+
+.kv-row > span:first-child { color: var(--text-dim); }
+/* justify-self evita que el chip se estire ocupando toda la columna de valor. */
+.kv-row .chip { justify-self: start; }
+.kv-row code { word-break: break-all; }
+
+.chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.chip {
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-family: var(--mono);
+    border: 1px solid var(--border);
+}
+
+.chip-good { background: rgba(61, 220, 151, 0.12); color: var(--good); border-color: rgba(61, 220, 151, 0.35); }
+.chip-bad { background: rgba(255, 107, 107, 0.12); color: var(--bad); border-color: rgba(255, 107, 107, 0.35); }
+.chip-neutral { background: var(--surface-2); color: var(--text-dim); }
+
+.badge { padding: 0.3rem 0.8rem; border-radius: var(--radius-sm); font-weight: 600; font-size: 0.85rem; }
+.badge-critical { background: rgba(255, 107, 107, 0.16); color: var(--bad); }
+.badge-warning { background: rgba(255, 184, 77, 0.16); color: var(--warn); }
+.badge-ok { background: rgba(61, 220, 151, 0.16); color: var(--good); }
+.badge-muted { background: var(--surface-2); color: var(--text-dim); }
+
+.alert { padding: 0.7rem 0.9rem; border-radius: var(--radius-sm); font-size: 0.88rem; margin: 0; }
+.alert-error { background: rgba(255, 107, 107, 0.12); color: var(--bad); border: 1px solid rgba(255, 107, 107, 0.35); }
+
+/* --------------------------------- Tablas -------------------------------- */
+
+.table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.table th { text-align: left; color: var(--text-dim); font-weight: 600; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
+.table td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
+.table tr:last-child td { border-bottom: none; }
+
+/* Contenedor con scroll propio: una tabla ancha no debe romper el layout de la página. */
+.panel .table { display: block; overflow-x: auto; white-space: nowrap; }
+
+/* --------------------------- Stream de Channels -------------------------- */
+
+.stream { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.25rem; max-height: 320px; overflow-y: auto; }
+
+.stream-item {
+    display: grid;
+    grid-template-columns: 3rem 1fr 5rem 4rem;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0.6rem;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    /* Animación de entrada: subraya que los eventos llegan de uno en uno. */
+    animation: slide-in 0.25s ease;
+}
+
+@keyframes slide-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: none; }
+}
+
+.stream-seq { color: var(--text-dim); font-family: var(--mono); }
+.stream-payload { color: var(--accent); }
+.stream-time { color: var(--text-dim); font-family: var(--mono); text-align: right; }
+.stream-depth { height: 8px; background: var(--bg); border-radius: 999px; overflow: hidden; }
+.stream-depth-fill { display: block; height: 100%; background: var(--warn); transition: width 0.2s ease; }
+
+/* ------------------------------ Etapas Docker ---------------------------- */
+
+.stage-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+
+.stage {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.9rem;
+    text-align: left;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.stage:hover { border-color: var(--accent); }
+.stage-active { border-color: var(--accent); background: var(--accent-soft); }
+
+.stage-index { font-size: 0.72rem; color: var(--accent); font-weight: 700; }
+.stage-name { font-weight: 600; }
+.stage-image { font-family: var(--mono); font-size: 0.74rem; color: var(--text-dim); word-break: break-all; }
+.stage-size { font-size: 0.78rem; color: var(--warn); }
+
+.stage-detail { margin-top: 1rem; }
+
+/* --------------------------- Bloques de código --------------------------- */
+
+.snippet { border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg); }
+
+.snippet-bar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.4rem 0.8rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+}
+
+.snippet-lang { color: var(--accent); font-weight: 600; }
+.snippet-source { font-family: var(--mono); }
+
+/* overflow-x en el <pre>: el código largo hace scroll dentro del bloque, no en la página. */
+.snippet-code { margin: 0; padding: 1rem; overflow-x: auto; line-height: 1.55; }
+
+/* Clases que emite CSharpHighlighter. */
+.tok-cmt { color: #6f7f9f; font-style: italic; }
+.tok-str { color: #ce9178; }
+.tok-num { color: #b5cea8; }
+.tok-kw { color: #569cd6; }
+.tok-typ { color: #4ec9b0; }
+
+/* ------------------------- UI de error del framework --------------------- */
+
+#blazor-error-ui {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    padding: 0.8rem 1.25rem;
+    background: var(--warn);
+    color: #1b1200;
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+}
+
+#blazor-error-ui .dismiss { cursor: pointer; float: right; }
+
+/* Respeta a quien pide menos movimiento en el sistema operativo. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+}

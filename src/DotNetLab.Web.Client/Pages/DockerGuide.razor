@@ -1,0 +1,322 @@
+@* Sección 2 del portal: Docker en producción. Interactiva porque el flujo multi-stage se
+   explora haciendo clic en cada etapa y porque consulta el estado real de los contenedores. *@
+@page "/docker"
+@rendermode InteractiveAuto
+@inject LabApiClient Api
+
+<PageTitle>Docker en producción · DotNetLab</PageTitle>
+
+<header class="page-head">
+    <p class="eyebrow">Fase 01 · Módulo 2</p>
+    <h1>Docker en producción</h1>
+    <p class="lede">
+        Una imagen de contenedor no es un ZIP de la aplicación: es la superficie de ataque y el
+        coste de despliegue de cada versión. Aquí se recorre el <code>Dockerfile</code> multi-stage
+        de este mismo repositorio, etapa por etapa.
+    </p>
+</header>
+
+<section class="panel">
+    <h2>1 · El flujo multi-stage</h2>
+    <p>
+        Un build de una sola etapa mete el SDK, el código fuente, los paquetes NuGet y las
+        herramientas de compilación en la imagen final. Multi-stage separa <em>construir</em> de
+        <em>ejecutar</em>: solo se copia a la imagen final el resultado publicado.
+    </p>
+
+    @* Diagrama de etapas: cada botón selecciona una etapa y actualiza el detalle de abajo. *@
+    <div class="stage-flow">
+        @foreach (var stage in Stages)
+        {
+            <button type="button"
+                    class="stage @(stage.Id == _selectedStage.Id ? "stage-active" : null)"
+                    @onclick="() => _selectedStage = stage"
+                    @key="stage.Id">
+                <span class="stage-index">@stage.Order</span>
+                <span class="stage-name">@stage.Name</span>
+                <span class="stage-image">@stage.BaseImage</span>
+                @* El tamaño aproximado hace tangible por qué la última etapa importa tanto. *@
+                <span class="stage-size">@stage.ApproxSize</span>
+            </button>
+        }
+    </div>
+
+    <div class="stage-detail">
+        <h3>@_selectedStage.Name</h3>
+        <p>@_selectedStage.Purpose</p>
+
+        <div class="kv">
+            <div class="kv-row"><span>Imagen base</span><code>@_selectedStage.BaseImage</code></div>
+            <div class="kv-row"><span>¿Llega a la imagen final?</span>
+                <span class="chip @(_selectedStage.EndsInFinalImage ? "chip-good" : "chip-neutral")">
+                    @(_selectedStage.EndsInFinalImage ? "sí" : "no, se descarta al terminar")
+                </span>
+            </div>
+        </div>
+
+        <CodeSnippet Code="@_selectedStage.Instructions" Language="Dockerfile" Source="src/DotNetLab.Api/Dockerfile" />
+    </div>
+</section>
+
+<section class="panel">
+    <h2>2 · Elegir la imagen base del runtime</h2>
+    <p>
+        La etapa final decide el tamaño y la superficie de ataque. Estas son las cuatro opciones
+        oficiales de .NET 10, de más a menos superficie:
+    </p>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Variante</th>
+                <th>Tamaño aprox.</th>
+                <th>Shell</th>
+                <th>Gestor de paquetes</th>
+                <th>Usuario</th>
+                <th>Cuándo usarla</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var image in BaseImages)
+            {
+                <tr @key="image.Tag">
+                    <td><code>@image.Tag</code></td>
+                    <td>@image.Size</td>
+                    @* Sin shell no hay 'docker exec sh' para un atacante... ni para ti al depurar. *@
+                    <td><span class="chip @(image.HasShell ? "chip-bad" : "chip-good")">@(image.HasShell ? "sí" : "no")</span></td>
+                    <td><span class="chip @(image.HasPackageManager ? "chip-bad" : "chip-good")">@(image.HasPackageManager ? "sí" : "no")</span></td>
+                    <td>@image.DefaultUser</td>
+                    <td>@image.WhenToUse</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <aside class="memory-note">
+        <strong>Por qué reduce la superficie de ataque:</strong> cada binario presente en la imagen
+        es una herramienta que un atacante puede usar tras conseguir ejecución. Sin
+        <code>sh</code>, sin <code>curl</code> y sin <code>apt</code>, una vulnerabilidad de
+        ejecución remota se queda sin la segunda fase del ataque. Además, menos paquetes significa
+        menos CVEs que parchear cada mes: lo que no está instalado no se audita.
+    </aside>
+</section>
+
+<section class="panel">
+    <h2>3 · .dockerignore, variables de entorno y secrets</h2>
+
+    <div class="pg-grid">
+        @foreach (var topic in Topics)
+        {
+            <article class="mini-card" @key="topic.Title">
+                <h3>@topic.Title</h3>
+                <p>@topic.Body</p>
+                <ul class="bullets">
+                    @foreach (var rule in topic.Rules)
+                    {
+                        <li>@rule</li>
+                    }
+                </ul>
+            </article>
+        }
+    </div>
+
+    <CodeSnippet Code="@SecretsSnippet" Language="YAML + C#" Source="docker-compose.yml + Program.cs" />
+</section>
+
+<section class="panel">
+    <h2>4 · Comprobar los contenedores en marcha</h2>
+    <p>
+        Este botón llama a <code>/api/diagnostics/health</code>. Si estás ejecutando la solución con
+        <code>docker compose up</code>, la respuesta demuestra tres cosas a la vez: que la API vive
+        dentro de un contenedor, que el frontend la alcanza por la red interna de Docker y que la
+        sonda al contenedor auxiliar responde.
+    </p>
+
+    <button class="btn btn-primary" @onclick="CheckHealthAsync" disabled="@_busy">
+        @(_busy ? "Consultando…" : "Comprobar estado")
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_health is { } h)
+    {
+        <div class="kv">
+            <div class="kv-row"><span>Estado</span>
+                <span class="chip @(h.Status == "Healthy" ? "chip-good" : "chip-bad")">@h.Status</span>
+            </div>
+            <div class="kv-row"><span>Runtime</span><code>@h.RuntimeVersion</code></div>
+            <div class="kv-row"><span>Entorno</span><code>@h.EnvironmentName</code></div>
+            @* DOTNET_RUNNING_IN_CONTAINER lo define la propia imagen oficial de .NET. *@
+            <div class="kv-row"><span>¿Dentro de un contenedor?</span>
+                <span class="chip @(h.InsideContainer ? "chip-good" : "chip-neutral")">
+                    @(h.InsideContainer ? "sí" : "no, proceso local")
+                </span>
+            </div>
+            @* En Docker, MachineName es el id corto del contenedor. *@
+            <div class="kv-row"><span>Host</span><code>@h.MachineName</code></div>
+            <div class="kv-row"><span>Contenedor auxiliar (@h.Cache.Name)</span>
+                <span class="chip @(h.Cache.Reachable ? "chip-good" : "chip-neutral")">
+                    @(h.Cache.Reachable ? $"alcanzable en {h.Cache.LatencyMs:F1} ms" : h.Cache.Detail)
+                </span>
+            </div>
+        </div>
+    }
+</section>
+
+@code {
+    // Etapa del Dockerfile con su propósito y las instrucciones reales del archivo del repo.
+    private sealed record Stage(
+        int Order, string Id, string Name, string BaseImage, string ApproxSize,
+        bool EndsInFinalImage, string Purpose, string Instructions);
+
+    // Variante de imagen base del runtime con sus características de seguridad.
+    private sealed record BaseImage(
+        string Tag, string Size, bool HasShell, bool HasPackageManager, string DefaultUser, string WhenToUse);
+
+    // Bloque explicativo de la tercera sección.
+    private sealed record Topic(string Title, string Body, string[] Rules);
+
+    // Etapa seleccionada en el diagrama; arranca en la primera.
+    private Stage _selectedStage = Stages[0];
+
+    private bool _busy;
+    private HealthResponse? _health;
+    private string? _error;
+
+    private async Task CheckHealthAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _health = await Api.GetHealthAsync();
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // static readonly: los datos son constantes de contenido, no estado del componente.
+    private static readonly Stage[] Stages =
+    [
+        new Stage(1, "restore", "Etapa 'restore'", "mcr.microsoft.com/dotnet/sdk:10.0-alpine", "~700 MB", false,
+            "Copia SOLO los .csproj y restaura los paquetes. Al ir en una capa propia, Docker la reutiliza " +
+            "mientras no cambien las dependencias: editar código C# no vuelve a descargar NuGet.",
+            """
+            FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS restore
+            WORKDIR /src
+            COPY ["Directory.Build.props", "global.json", "./"]
+            COPY ["src/DotNetLab.Api/DotNetLab.Api.csproj", "src/DotNetLab.Api/"]
+            COPY ["src/DotNetLab.Contracts/DotNetLab.Contracts.csproj", "src/DotNetLab.Contracts/"]
+            RUN dotnet restore "src/DotNetLab.Api/DotNetLab.Api.csproj"
+            """),
+
+        new Stage(2, "build", "Etapa 'publish'", "mcr.microsoft.com/dotnet/sdk:10.0-alpine", "~700 MB", false,
+            "Copia el resto del código y publica en Release. Aquí viven el compilador, el SDK, los " +
+            "símbolos y el código fuente: nada de esto debe llegar a producción.",
+            """
+            FROM restore AS publish
+            COPY . .
+            RUN dotnet publish "src/DotNetLab.Api/DotNetLab.Api.csproj" \
+                -c Release -o /app/publish --no-restore /p:UseAppHost=false
+            """),
+
+        new Stage(3, "final", "Etapa final (runtime)", "mcr.microsoft.com/dotnet/aspnet:10.0-alpine", "~110 MB", true,
+            "Parte de la imagen de runtime (sin SDK ni compilador), copia únicamente /app/publish y " +
+            "ejecuta como el usuario sin privilegios 'app' que ya trae la imagen oficial. " +
+            "Es la única etapa que se sube al registro.",
+            """
+            FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
+            WORKDIR /app
+            ENV ASPNETCORE_HTTP_PORTS=8080 ASPNETCORE_ENVIRONMENT=Production DOTNET_NOLOGO=1
+            # Solo el resultado publicado; el SDK y las fuentes se quedan en las etapas previas.
+            COPY --from=publish --chown=app:app /app/publish .
+            EXPOSE 8080
+            # 'app' (UID 64198) ya viene definido en las imágenes oficiales de .NET 8+.
+            USER $APP_UID
+            HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3                 CMD wget --quiet --spider http://localhost:8080/api/diagnostics/health || exit 1
+            # Forma exec: dotnet es PID 1 y recibe SIGTERM para un apagado ordenado.
+            ENTRYPOINT ["dotnet", "DotNetLab.Api.dll"]
+            """)
+    ];
+
+    private static readonly BaseImage[] BaseImages =
+    [
+        new BaseImage("aspnet:10.0", "~220 MB", true, true, "root (histórico) / app",
+            "Depuración y entornos donde necesitas herramientas dentro del contenedor."),
+        new BaseImage("aspnet:10.0-alpine", "~110 MB", true, true, "app (no root)",
+            "Equilibrio por defecto: pequeña, con shell para diagnosticar, musl en vez de glibc."),
+        new BaseImage("aspnet:10.0-noble-chiseled", "~105 MB", false, false, "app (UID 64198)",
+            "Producción: Ubuntu recortada, sin shell ni gestor de paquetes, con glibc."),
+        new BaseImage("aspnet:10.0-noble-chiseled-extra", "~120 MB", false, false, "app (UID 64198)",
+            "Como la anterior pero con ICU y tzdata: necesaria si NO usas InvariantGlobalization.")
+    ];
+
+    private static readonly Topic[] Topics =
+    [
+        new Topic(".dockerignore",
+            "Se aplica ANTES de enviar el contexto al daemon. Sin él, 'COPY . .' arrastra bin/, obj/ y " +
+            ".git al build: capas enormes, cachés invalidadas en cada commit y binarios de tu máquina " +
+            "sobrescribiendo los del contenedor.",
+            [
+                "Excluye bin/, obj/ y artefactos: se recompilan dentro de la imagen.",
+                "Excluye .git/: su historial puede pesar más que la aplicación.",
+                "Excluye .env, *.pfx, secrets/: nunca deben entrar en una capa.",
+                "Sin él, un secreto borrado en una capa posterior sigue siendo recuperable."
+            ]),
+
+        new Topic("Variables de entorno",
+            "Son configuración, no secretos: aparecen en 'docker inspect' y en los logs del orquestador. " +
+            "ASP.NET Core las mapea a su configuración usando '__' como separador jerárquico.",
+            [
+                "Cache__Host=cache equivale a la clave \"Cache:Host\" de appsettings.json.",
+                "ASPNETCORE_ENVIRONMENT selecciona appsettings.{Environment}.json.",
+                "ASPNETCORE_HTTP_PORTS fija el puerto; la imagen oficial ya trae 8080.",
+                "Úsalas para hosts, puertos, niveles de log y feature flags."
+            ]),
+
+        new Topic("Secrets",
+            "Docker Compose monta cada secret como un fichero en /run/secrets/<nombre>, con permisos " +
+            "restringidos y fuera del sistema de capas. La aplicación lee la RUTA, nunca el valor.",
+            [
+                "El valor no aparece en el historial de la imagen ni en 'docker inspect'.",
+                "SharedKey__File apunta al fichero; el código lo lee una vez al arrancar.",
+                "Rotar el secreto es reiniciar el contenedor, no reconstruir la imagen.",
+                "En producción, el mismo patrón sirve para Kubernetes Secrets o Key Vault."
+            ])
+    ];
+
+    // Fragmento que une las tres piezas: compose declara el secret, la API lo lee por ruta.
+    private const string SecretsSnippet =
+        """
+        # docker-compose.yml — el secreto se declara una vez y se monta donde hace falta.
+        secrets:
+          lab_shared_key:
+            file: ./secrets/lab_shared_key.txt
+
+        services:
+          api:
+            environment:
+              # Configuración normal: visible, versionable, sin valor sensible.
+              - Cache__Host=cache
+              - Cache__Enabled=true
+              # La app recibe la RUTA del secreto, no el secreto.
+              - SharedKey__File=/run/secrets/lab_shared_key
+            secrets:
+              - lab_shared_key
+
+        // Program.cs — el validador lo lee UNA vez al construirse (Singleton).
+        var fromFile = !string.IsNullOrWhiteSpace(options.File) && File.Exists(options.File)
+            ? File.ReadAllText(options.File).Trim()
+            : null;
+        """;
+}

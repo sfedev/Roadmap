@@ -1,0 +1,24 @@
+<!-- Host del Blazor Web App: sirve el HTML, ejecuta el render de servidor y hace de proxy
+     hacia la Web API. Es el único proceso del frontend expuesto al navegador. -->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>DotNetLab.Web</RootNamespace>
+    <UserSecretsId>dotnetlab-web</UserSecretsId>
+    <!-- Evita NavigationException al redirigir durante el prerender en servidor. -->
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Sirve los archivos del runtime WebAssembly del proyecto cliente (modo Auto). -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- El ensamblado cliente aporta las páginas interactivas y se descarga como WASM. -->
+    <ProjectReference Include="..\DotNetLab.Web.Client\DotNetLab.Web.Client.csproj" />
+    <!-- Contratos compartidos: el proxy y el render de servidor usan los mismos records. -->
+    <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

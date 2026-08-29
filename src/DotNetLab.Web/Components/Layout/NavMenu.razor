@@ -1,0 +1,17 @@
+@* Navegación principal. No declara @rendermode: se renderiza de forma ESTÁTICA en el
+   servidor, así que no consume circuito SignalR ni descarga de WebAssembly. *@
+
+<nav class="nav">
+    <a class="brand" href="/">
+        <span class="brand-mark" aria-hidden="true">◆</span>
+        <span class="brand-text">DotNetLab</span>
+    </a>
+
+    <div class="nav-links">
+        @* NavLink añade la clase "active" comparando la URL actual con Href.
+           Match=All en la raíz: sin esto, "/" quedaría activo en todas las rutas. *@
+        <NavLink class="nav-link" href="" Match="NavLinkMatch.All">Inicio</NavLink>
+        <NavLink class="nav-link" href="modern-dotnet">Modern .NET y C#</NavLink>
+        <NavLink class="nav-link" href="docker">Docker en producción</NavLink>
+    </div>
+</nav>

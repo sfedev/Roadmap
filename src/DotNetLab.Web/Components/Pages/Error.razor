@@ -1,0 +1,45 @@
+@* Página a la que redirige UseExceptionHandler fuera de desarrollo. Se renderiza de forma
+   estática: si la interactividad está rota, una página que la necesite tampoco funcionaría. *@
+@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>Error · DotNetLab</PageTitle>
+
+<div class="panel">
+    <h1>Algo ha fallado</h1>
+    <p class="lede">
+        La petición no se pudo completar. El detalle técnico está en los logs del servidor,
+        no en esta página: mostrar excepciones al usuario final filtra información del sistema.
+    </p>
+
+    @* El identificador de correlación es lo único que sí conviene enseñar: permite localizar
+       la traza exacta en los logs sin exponer nada del error. *@
+    @if (ShowRequestId)
+    {
+        <div class="kv">
+            <div class="kv-row"><span>Identificador de la petición</span><code>@RequestId</code></div>
+        </div>
+    }
+
+    <p class="pg-note">
+        Si estás desarrollando en local, arranca con <code>ASPNETCORE_ENVIRONMENT=Development</code>
+        para ver la página de excepción detallada.
+    </p>
+
+    <a class="btn btn-primary" href="/">Volver al inicio</a>
+</div>
+
+@code {
+    // HttpContext llega como parámetro en cascada solo en render estático de servidor.
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+
+    // Sin identificador no se pinta la fila: mejor omitirla que mostrarla vacía.
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    // Activity.Current?.Id es el trace id de OpenTelemetry si hay instrumentación;
+    // TraceIdentifier es el respaldo que siempre define Kestrel.
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

@@ -1,0 +1,26 @@
+<!-- Ensamblado cliente del Blazor Web App: contiene los componentes que pueden ejecutarse
+     en WebAssembly. Con render mode Auto, estos mismos componentes corren primero en el
+     servidor (SignalR) y, tras descargarse el runtime WASM, en el navegador. -->
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <RootNamespace>DotNetLab.Web.Client</RootNamespace>
+    <!-- El proyecto cliente no arranca solo: se sirve desde el host, así que no necesita perfil. -->
+    <NoDefaultLaunchSettingsFile>true</NoDefaultLaunchSettingsFile>
+    <!-- Deja que el host decida cómo se publican los static web assets compartidos. -->
+    <StaticWebAssetProjectMode>Default</StaticWebAssetProjectMode>
+    <!-- Evita que NavigationManager lance NavigationException al navegar durante el prerender. -->
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Runtime de Blazor WebAssembly: el que descarga el navegador en el modo Auto. -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Mismos records que usa la API: el JSON se deserializa a tipos, no a diccionarios. -->
+    <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

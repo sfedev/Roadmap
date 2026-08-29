@@ -1,0 +1,30 @@
+@* Layout global. Hereda de LayoutComponentBase, que aporta la propiedad Body con el
+   contenido de la página activa. *@
+@inherits LayoutComponentBase
+
+<div class="shell">
+    @* La barra de navegación es un componente aparte para poder marcarla como estática:
+       no necesita interactividad y así no consume circuito ni descarga. *@
+    <NavMenu />
+
+    <main class="content">
+        @* Body = el componente de la ruta actual. *@
+        @Body
+    </main>
+
+    <footer class="footer">
+        <span>DotNetLab · Fase 01 — Modern .NET y Docker</span>
+        @* Enlaces informativos hacia los endpoints crudos, útiles para inspeccionar el JSON. *@
+        <span class="footer-links">
+            <a href="/api/diagnostics/health">/api/diagnostics/health</a>
+        </span>
+    </footer>
+</div>
+
+@* Barra de error del framework: blazor.web.js la muestra (mediante CSS) cuando una excepción
+   no controlada rompe el circuito. Está oculta por defecto desde app.css. *@
+<div id="blazor-error-ui" data-nosnippet>
+    Se ha producido un error inesperado.
+    <a href="." class="reload">Recargar</a>
+    <span class="dismiss">🗙</span>
+</div>

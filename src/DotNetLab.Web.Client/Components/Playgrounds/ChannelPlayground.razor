@@ -1,0 +1,137 @@
+@* Playground de Channels: consume el stream y pinta cada evento EN CUANTO llega,
+   no al terminar la respuesta. Es la prueba visual de que el backend hace streaming. *@
+@inject LabApiClient Api
+@* IDisposable para cancelar el stream si el usuario navega fuera a mitad de ejecución. *@
+@implements IDisposable
+
+<div class="pg">
+    <div class="pg-grid">
+        <label class="field">
+            <span class="field-label">Eventos: <strong>@_events</strong></span>
+            <input type="range" min="4" max="60" step="1"
+                   @bind="_events" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            @* Capacidad pequeña + consumidor lento = backpressure garantizado. *@
+            <span class="field-label">Capacidad del canal: <strong>@_capacity</strong></span>
+            <input type="range" min="1" max="16" step="1"
+                   @bind="_capacity" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            <span class="field-label">Retardo del consumidor: <strong>@_delay ms</strong></span>
+            <input type="range" min="0" max="200" step="5"
+                   @bind="_delay" @bind:event="oninput" disabled="@_busy" />
+        </label>
+    </div>
+
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            @(_busy ? "Consumiendo…" : "Arrancar pipeline")
+        </button>
+        @* Cancelar demuestra que el token llega hasta el productor del servidor. *@
+        <button class="btn" @onclick="Cancel" disabled="@(!_busy)">Cancelar</button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_received.Count > 0)
+    {
+        <p class="pg-note">
+            Recibidos <strong>@_received.Count</strong> de @_events ·
+            ocupación máxima observada del canal: <strong>@_maxDepth</strong> / @_capacity
+        </p>
+
+        <ol class="stream">
+            @* Clave estable por secuencia: Blazor reutiliza los nodos existentes al añadir uno nuevo
+               en vez de recrear la lista entera en cada evento. *@
+            @foreach (var evt in _received)
+            {
+                <li class="stream-item" @key="evt.Sequence">
+                    <span class="stream-seq">#@evt.Sequence</span>
+                    <code class="stream-payload">@evt.Payload</code>
+                    <span class="stream-time">@evt.OffsetMs.ToString("F0") ms</span>
+                    @* Barra de ocupación: sube al llenarse el canal y baja al drenarlo. *@
+                    <span class="stream-depth" title="Elementos esperando en el canal">
+                        <span class="stream-depth-fill" style="width:@DepthPercent(evt.QueueDepth)"></span>
+                    </span>
+                </li>
+            }
+        </ol>
+    }
+</div>
+
+@code {
+    private int _events = 20;
+    private int _capacity = 3;
+    private int _delay = 60;
+
+    private bool _busy;
+    private string? _error;
+
+    // Eventos ya recibidos, en orden de llegada.
+    private readonly List<ChannelEvent> _received = [];
+
+    // Mayor ocupación observada: la evidencia numérica del backpressure.
+    private int _maxDepth;
+
+    // Fuente de cancelación del stream en curso; null cuando no hay ninguno activo.
+    private CancellationTokenSource? _cts;
+
+    private async Task RunAsync()
+    {
+        // Cancela y libera un stream anterior antes de empezar otro.
+        Cancel();
+        _cts = new CancellationTokenSource();
+
+        _busy = true;
+        _error = null;
+        _received.Clear();
+        _maxDepth = 0;
+
+        try
+        {
+            // await foreach sobre IAsyncEnumerable: el bucle avanza cada vez que llega un elemento.
+            await foreach (var evt in Api.StreamChannelEventsAsync(_events, _capacity, _delay, _cts.Token))
+            {
+                _received.Add(evt);
+                _maxDepth = Math.Max(_maxDepth, evt.QueueDepth);
+
+                // StateHasChanged explícito: el render automático solo ocurre al terminar el
+                // manejador, y aquí queremos repintar en cada elemento del stream.
+                StateHasChanged();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelación pedida por el usuario: no es un error, se informa y punto.
+            _error = $"Stream cancelado tras {_received.Count} eventos.";
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Cancela el stream activo y libera la fuente de cancelación.
+    private void Cancel()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    // Dispose del componente: sin esto, salir de la página dejaría el stream corriendo.
+    public void Dispose() => Cancel();
+
+    // Ocupación relativa a la capacidad, en porcentaje CSS.
+    private string DepthPercent(int depth) => $"{Math.Clamp(depth * 100.0 / _capacity, 0, 100):F0}%";
+}

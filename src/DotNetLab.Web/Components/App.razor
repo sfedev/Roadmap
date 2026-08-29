@@ -1,0 +1,40 @@
+@* Documento HTML raíz. Se renderiza SIEMPRE en el servidor (modo estático): es el cascarón
+   dentro del cual arrancan después los componentes interactivos. *@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    @* <base> fija la raíz de las rutas relativas; el HttpClient del cliente WASM la usa. *@
+    <base href="/" />
+
+    @* Precarga los recursos que Blazor sabe que va a necesitar, evitando cascadas de peticiones. *@
+    <ResourcePreloader />
+
+    @* Assets["..."] resuelve la URL con huella (hash) del archivo: cache infinita y sin
+       invalidaciones manuales cuando cambia el CSS. *@
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    @* Hoja generada por los estilos aislados (.razor.css) de los componentes. *@
+    <link rel="stylesheet" href="@Assets["DotNetLab.Web.styles.css"]" />
+
+    @* Mapa de importación de módulos JS que usa el propio framework. *@
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+
+    @* Punto donde los componentes inyectan <title> y metadatos mediante PageTitle/HeadContent. *@
+    <HeadOutlet />
+</head>
+
+<body>
+    @* Router de la aplicación. *@
+    <Routes />
+
+    @* Aviso de reconexión del circuito SignalR cuando se cae la conexión en render de servidor. *@
+    <ReconnectModal />
+
+    @* blazor.web.js decide por componente si arranca un circuito SignalR o el runtime WASM. *@
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

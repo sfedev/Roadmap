@@ -1,0 +1,44 @@
+@* Fila comparativa: una métrica, dos estrategias y dos barras proporcionales. *@
+
+<div class="metric">
+    <span class="metric-label">@Label</span>
+
+    <div class="metric-bars">
+        @* Barra de la estrategia con spans. El ancho se calcula en servidor/cliente C# y se
+           escribe como estilo inline porque es un valor dinámico, no un estado de diseño. *@
+        <div class="bar-row">
+            <span class="bar-tag bar-tag-good">Span</span>
+            <div class="bar-track">
+                @* Mínimo del 2%: una barra de 0 px sería invisible y parecería un fallo de render. *@
+                <div class="bar-fill bar-fill-good" style="width:@ToPercent(SpanRatio)"></div>
+            </div>
+            <span class="bar-value">@SpanText</span>
+        </div>
+
+        @* La estrategia naive es siempre la referencia: su barra ocupa el 100% del carril. *@
+        <div class="bar-row">
+            <span class="bar-tag bar-tag-bad">Split</span>
+            <div class="bar-track">
+                <div class="bar-fill bar-fill-bad" style="width:100%"></div>
+            </div>
+            <span class="bar-value">@NaiveText</span>
+        </div>
+    </div>
+</div>
+
+@code {
+    // Nombre de la métrica comparada.
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+
+    // Valor ya formateado de la estrategia con spans.
+    [Parameter, EditorRequired] public string SpanText { get; set; } = string.Empty;
+
+    // Valor ya formateado de la estrategia con string.Split.
+    [Parameter, EditorRequired] public string NaiveText { get; set; } = string.Empty;
+
+    // Proporción (0..1) del valor de span respecto al de naive.
+    [Parameter] public double SpanRatio { get; set; }
+
+    // Convierte la proporción a porcentaje CSS con un mínimo visible del 2%.
+    private static string ToPercent(double ratio) => $"{Math.Max(ratio * 100, 2):F1}%";
+}

@@ -1,0 +1,93 @@
+@* Playground de pattern matching: el usuario mueve los valores y ve QUÉ rama del switch gana. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-grid">
+        <label class="field">
+            <span class="field-label">Identificador del sensor</span>
+            @* El prefijo "sensor-" es lo que activa la rama del list pattern en el backend. *@
+            <input type="text" @bind="_sensorId" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            <span class="field-label">Valor medido: <strong>@_value.ToString("F1") °C</strong></span>
+            <input type="range" min="-60" max="120" step="0.5"
+                   @bind="_value" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            <span class="field-label">Batería: <strong>@_battery %</strong></span>
+            <input type="range" min="0" max="100" step="1"
+                   @bind="_battery" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            <span class="field-label">Serie temporal (list patterns)</span>
+            <input type="text" @bind="_series" disabled="@_busy" />
+        </label>
+    </div>
+
+    <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+        @(_busy ? "Clasificando…" : "Clasificar lectura")
+    </button>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_result is { } r)
+    {
+        @* La severidad decide el color: el mapeo vive en un método, no en el marcado. *@
+        <div class="verdict-row">
+            <span class="badge @SeverityClass(r.Severity)">@r.Severity</span>
+            <span class="pg-note">rama #@r.BranchIndex del switch</span>
+        </div>
+
+        <div class="kv">
+            <div class="kv-row"><span>Patrón que casó</span><code>@r.MatchedPattern</code></div>
+            <div class="kv-row"><span>Diagnóstico de la serie</span><code>@r.SeriesDiagnosis</code></div>
+        </div>
+    }
+</div>
+
+@code {
+    // Valores iniciales elegidos para que la primera ejecución caiga en la rama "Nominal".
+    private string _sensorId = "sensor-0042";
+    private double _value = 21.5;
+    private int _battery = 88;
+    private string _series = "18.2, 19.4, 21.0, 24.6, 31.8";
+
+    private bool _busy;
+    private PatternMatchResponse? _result;
+    private string? _error;
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _result = await Api.GetPatternMatchAsync(_sensorId, _value, _battery, _series);
+        }
+        catch (HttpRequestException ex)
+        {
+            // El backend responde 400 si el valor sale del rango físico: se muestra tal cual.
+            _error = $"La API rechazó la lectura: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Traduce la severidad a la clase CSS del badge. Switch expression sobre string constante.
+    private static string SeverityClass(string severity) => severity switch
+    {
+        "Critical" => "badge-critical",
+        "Warning" => "badge-warning",
+        "Nominal" => "badge-ok",
+        _ => "badge-muted"
+    };
+}

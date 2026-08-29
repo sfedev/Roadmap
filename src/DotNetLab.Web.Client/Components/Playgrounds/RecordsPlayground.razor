@@ -1,0 +1,65 @@
+@* Playground de records: ejecuta la demo en el servidor y muestra igualdad y clonado. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            @(_busy ? "Ejecutando…" : "Ejecutar demo de records")
+        </button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_result is { } r)
+    {
+        <div class="kv">
+            @* ToString() generado por el compilador del record. *@
+            <div class="kv-row"><span>Original</span><code>@r.Original</code></div>
+            <div class="kv-row"><span>Tras 'with'</span><code>@r.Mutated</code></div>
+        </div>
+
+        <div class="chips">
+            @* Los dos booleanos que resumen la semántica de valor frente a la de referencia. *@
+            <span class="chip @(r.ValueEqualityHolds ? "chip-good" : "chip-bad")">
+                original == clon → @(r.ValueEqualityHolds ? "true" : "false")
+            </span>
+            <span class="chip @(r.ReferenceEqualityHolds ? "chip-bad" : "chip-good")">
+                ReferenceEquals → @(r.ReferenceEqualityHolds ? "true" : "false")
+            </span>
+            @* Hash idénticos: requisito del contrato Equals/GetHashCode que el record cumple solo. *@
+            <span class="chip @(r.OriginalHashCode == r.CloneHashCode ? "chip-good" : "chip-bad")">
+                hash @r.OriginalHashCode == @r.CloneHashCode
+            </span>
+        </div>
+
+        <p class="pg-note">@r.Insight</p>
+    }
+</div>
+
+@code {
+    private bool _busy;
+    private RecordsDemoResponse? _result;
+    private string? _error;
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _result = await Api.GetRecordsDemoAsync();
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
