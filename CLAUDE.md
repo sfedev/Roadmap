@@ -102,6 +102,10 @@ docker build -f src/DotNetLab.Api/Dockerfile -t dotnetlab-api .
 > El contexto de build es **la raíz del repositorio** (el `.` final), no la carpeta del proyecto:
 > ambos proyectos referencian `DotNetLab.Contracts`, que vive fuera de sus carpetas.
 
+> **En Git Bash sobre Windows**, usa `-p:Propiedad=valor` y no `/p:Propiedad=valor`: el conversor de
+> rutas de MSYS interpreta `/p:` como una ruta y MSBuild falla con `MSB1008`. Dentro del contenedor
+> (Linux) `/p:` funciona sin problema, que es como está escrito en los Dockerfile.
+
 ### Diagnóstico rápido
 
 ```bash

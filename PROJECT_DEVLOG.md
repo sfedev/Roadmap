@@ -402,6 +402,16 @@ Todo lo siguiente se ejecutó de verdad durante el desarrollo, no se asume:
   (0 B frente a 11,55 MB, 2,96x más rápido sobre 25.000 filas), resaltado de sintaxis y guía de
   Docker con selección de etapas.
 - El proxy `/api/...` del host Blazor, comprobado contra la API real.
+- El modo de render **Auto**: la primera visita muestra "ejecutándose en el servidor (circuito
+  SignalR)" y, tras descargarse el runtime, la recarga muestra "ejecutándose en WebAssembly".
+- `dotnet publish -c Release` de ambos proyectos, **incluido el recorte de IL (trimming)** del
+  cliente WebAssembly: sin avisos de trimming.
+- La salida publicada en Release, ejecutada y recorrida en el navegador: el playground de `Span<T>`
+  funciona desde WebAssembly recortado (0 B frente a 11,55 MB) y el stream de Channels entrega
+  20/20 eventos con ocupación máxima de canal 3/3 a través del proxy.
+
+Es la validación más cercana al contenedor que se puede hacer sin Docker: el publish en Release con
+trimming es exactamente el paso que ejecuta la etapa `publish` del Dockerfile.
 
 **Pendiente de verificar en una máquina con Docker:** la construcción de las imágenes y
 `docker compose up`. Los `Dockerfile` y el `docker-compose.yml` están escritos y comentados, pero
