@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DotNetLab.Api/DotNetLab.Api.csproj" />
+    <Project Path="src/DotNetLab.Contracts/DotNetLab.Contracts.csproj" />
+    <Project Path="src/DotNetLab.Web.Client/DotNetLab.Web.Client.csproj" />
+    <Project Path="src/DotNetLab.Web/DotNetLab.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DotNetLab.Api.Tests/DotNetLab.Api.Tests.csproj" />
+  </Folder>
+</Solution>

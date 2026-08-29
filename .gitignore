@@ -1,0 +1,22 @@
+# Artefactos de compilación de .NET
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+publish/
+TestResults/
+*.user
+*.suo
+
+# Herramientas y entornos locales
+.vs/
+.vscode/
+.idea/
+
+# Secretos: solo se versiona el ejemplo, nunca el valor real
+secrets/*.txt
+!secrets/*.example.txt
+.env
+*.pfx
+*.p12
+*.key
+*.pem

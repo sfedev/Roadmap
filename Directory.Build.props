@@ -1,0 +1,34 @@
+<!-- Props heredadas por TODOS los proyectos: centraliza el estándar de compilación del repo. -->
+<Project>
+
+  <PropertyGroup>
+    <!-- TFM único para toda la solución; se referencia desde cada csproj para no repetirlo. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- C# 14 es el default de net10.0; se declara explícito para documentar la intención. -->
+    <LangVersion>14.0</LangVersion>
+    <!-- Nullable reference types activo: el compilador exige anotar lo que puede ser null. -->
+    <Nullable>enable</Nullable>
+    <!-- Usings implícitos (System, System.Linq, ...) para reducir ruido en cada archivo. -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Trata los warnings como errores: ninguna advertencia entra en main sin resolverse. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Nivel de análisis estático más alto disponible para el TFM. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- Genera el .xml de documentación para que los comentarios /// sean consumibles. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Determinismo: mismo input => mismo binario (reproducible builds, cacheable en Docker). -->
+    <Deterministic>true</Deterministic>
+    <!-- Silencia CS1591 (miembro público sin doc XML): documentamos con comentarios inline. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Cultura invariante en TODAS las configuraciones (no solo Release): así el formato de
+         números y fechas es idéntico en `dotnet run` y dentro del contenedor. De paso, sin ICU
+         la imagen final adelgaza ~30 MB. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- En Release se recorta la info de depuración a portable (más pequeña, aún útil en logs). -->
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+</Project>

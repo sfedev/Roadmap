@@ -1,0 +1,54 @@
+# =============================================================================
+# Se aplica ANTES de enviar el contexto al daemon de Docker. Todo lo que no se excluya
+# aquí viaja en cada build: ralentiza, engorda las capas e invalida la caché sin motivo.
+# =============================================================================
+
+# --- Artefactos de compilación ----------------------------------------------
+# Se regeneran dentro de la imagen. Copiarlos, además, arrastraría binarios compilados
+# contra el SDK de la máquina de desarrollo, que puede no coincidir con el del contenedor.
+**/bin/
+**/obj/
+**/out/
+**/publish/
+**/TestResults/
+
+# --- Control de versiones ---------------------------------------------------
+# El historial de .git suele pesar más que la propia aplicación y no aporta nada al runtime.
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# --- Secretos y configuración local -----------------------------------------
+# CRÍTICO: una vez que un fichero entra en una capa, borrarlo en una capa posterior NO lo
+# elimina de la imagen; sigue siendo recuperable con 'docker history'.
+secrets/
+*.env
+.env
+*.pfx
+*.p12
+*.key
+*.pem
+appsettings.*.local.json
+
+# --- Herramientas y entornos de desarrollo ----------------------------------
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# --- Docker y documentación --------------------------------------------------
+# El propio Dockerfile no hace falta dentro de la imagen; los .md tampoco se sirven.
+**/Dockerfile
+**/Dockerfile.*
+docker-compose*.yml
+.dockerignore
+*.md
+LICENSE
+
+# --- Dependencias de terceros -------------------------------------------------
+# Si en algún momento se añade tooling de frontend, node_modules jamás debe entrar:
+# se instala en su propia etapa o se compila fuera.
+**/node_modules/

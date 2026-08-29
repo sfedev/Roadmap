@@ -1,0 +1,9 @@
+{
+  // Fija la banda del SDK: evita que un SDK 11 preview compile el repo con otras reglas.
+  "sdk": {
+    "version": "10.0.300",
+    // "latestFeature" permite cualquier 10.0.3xx instalado sin exigir el parche exacto.
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}

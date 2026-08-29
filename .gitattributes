@@ -1,0 +1,12 @@
+# Normaliza los finales de línea: LF en el repositorio, nativo en el working copy.
+* text=auto
+
+# Archivos que DEBEN llevar LF aunque se editen en Windows: Docker y los shell scripts
+# fallan dentro del contenedor si llegan con CRLF.
+Dockerfile text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+
+# Binarios: nunca aplicar conversión.
+*.png binary
+*.ico binary
