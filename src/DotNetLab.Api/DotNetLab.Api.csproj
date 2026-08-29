@@ -1,0 +1,30 @@
+<!-- Web API con Minimal APIs. TargetFramework/Nullable/LangVersion vienen de Directory.Build.props. -->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <!-- Espacio de nombres raíz explícito: los archivos viven en subcarpetas por módulo. -->
+    <RootNamespace>DotNetLab.Api</RootNamespace>
+    <!-- Identificador estable para docker build (compat con el tooling de contenedores del SDK). -->
+    <UserSecretsId>dotnetlab-api</UserSecretsId>
+    <!-- Genera el .json de OpenAPI en tiempo de build, no solo en runtime. -->
+    <OpenApiGenerateDocuments>false</OpenApiGenerateDocuments>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenAPI nativo de ASP.NET Core (sustituye a Swashbuckle desde .NET 9). -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <!-- 10.0.11 (no 10.0.9) porque las versiones anteriores arrastran Microsoft.OpenApi 2.0.0,
+         afectada por GHSA-v5pm-xwqc-g5wc: con TreatWarningsAsErrors, NU1903 rompe el build. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Los DTOs se comparten con el cliente Blazor: un único contrato, cero duplicación. -->
+    <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Expone los internals al proyecto de tests sin tener que hacer públicos los servicios. -->
+    <InternalsVisibleTo Include="DotNetLab.Api.Tests" />
+  </ItemGroup>
+
+</Project>
