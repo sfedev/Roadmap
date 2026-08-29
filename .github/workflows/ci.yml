@@ -1,0 +1,128 @@
+# =============================================================================
+# Integración continua de DotNetLab.
+#
+# Dos trabajos independientes que corren en paralelo:
+#   1. build-and-test → compila la solución y ejecuta las 31 pruebas.
+#   2. docker         → construye las dos imágenes y arranca la de la API para
+#                       comprobar que responde de verdad.
+#
+# El segundo trabajo existe porque los Dockerfile no se pueden verificar en una
+# máquina sin Docker: los runners de Ubuntu ya lo traen instalado.
+# =============================================================================
+
+name: CI
+
+on:
+  # Cada push a main: es la rama que se despliega.
+  push:
+    branches: [main]
+  # Y cada pull request contra main, para que el fallo aparezca antes de fusionar.
+  pull_request:
+    branches: [main]
+  # Permite lanzarlo a mano desde la pestaña Actions sin tener que hacer un commit.
+  workflow_dispatch:
+
+# Permisos mínimos: el workflow solo necesita leer el código, no escribir nada.
+permissions:
+  contents: read
+
+# Cancela ejecuciones anteriores de la misma rama: en una serie de pushes seguidos
+# solo interesa el resultado del último.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Compilación y pruebas
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Build y tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar el SDK de .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Se lee de global.json en vez de fijar la versión aquí: una sola fuente
+          # de verdad para la banda del SDK en todo el repositorio.
+          global-json-file: global.json
+
+      - name: Restaurar dependencias
+        run: dotnet restore
+
+      # --no-restore evita repetir el paso anterior. El repositorio compila con
+      # TreatWarningsAsErrors, así que un aviso nuevo tumba el build aquí.
+      - name: Compilar en Release
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Ejecutar las pruebas
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      # Publicar en Release ejercita el recorte de IL (trimming) del cliente
+      # WebAssembly, que es justo lo que hace la etapa 'publish' del Dockerfile.
+      # Si el trimming rompiese algo, se vería aquí y no en producción.
+      - name: Publicar el frontend (valida el trimming del WASM)
+        run: dotnet publish src/DotNetLab.Web --configuration Release --no-build -o ./artifacts/web
+
+  # ---------------------------------------------------------------------------
+  # Imágenes de contenedor
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Imágenes Docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      # El contexto de build es la raíz del repositorio (el '.' final) porque ambos
+      # proyectos referencian DotNetLab.Contracts, que vive fuera de sus carpetas.
+      - name: Construir la imagen de la API
+        run: docker build -f src/DotNetLab.Api/Dockerfile -t dotnetlab-api:ci .
+
+      - name: Construir la imagen del frontend
+        run: docker build -f src/DotNetLab.Web/Dockerfile -t dotnetlab-web:ci .
+
+      # El compose declara un secret por fichero. En CI se genera uno desechable:
+      # nunca sale del runner y se destruye con él.
+      - name: Generar un secreto desechable para validar el compose
+        run: openssl rand -base64 32 > secrets/lab_shared_key.txt
+
+      # 'config -q' resuelve el compose completo (variables, secrets, redes) y falla
+      # si hay un error de sintaxis o una referencia rota.
+      - name: Validar docker-compose.yml
+        run: docker compose config -q
+
+      # Construir una imagen no demuestra que arranque. Este paso la ejecuta de verdad.
+      - name: Arrancar la API en un contenedor
+        run: docker run -d --name api-ci -p 8080:8080 dotnetlab-api:ci
+
+      # El HEALTHCHECK del Dockerfile tarda unos segundos en dar el primer veredicto,
+      # así que se sondea el endpoint con reintentos en vez de esperar a ciegas.
+      - name: Comprobar que responde el endpoint de salud
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/api/diagnostics/health; then
+              echo ""
+              echo "La API respondió correctamente."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "La API no respondió en 60 segundos."
+          exit 1
+
+      # Los logs solo se vuelcan si algo falló: en caso de éxito son ruido.
+      - name: Volcar los logs del contenedor si falló
+        if: failure()
+        run: docker logs api-ci
+
+      # always() garantiza la limpieza aunque el paso anterior haya fallado.
+      - name: Detener el contenedor
+        if: always()
+        run: docker rm -f api-ci
