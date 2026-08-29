@@ -1,0 +1,10 @@
+<!-- Librería de contratos: la comparten API y cliente WASM para que el JSON sea un tipo, no un dynamic. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TargetFramework/Nullable/LangVersion llegan heredados de Directory.Build.props. -->
+    <!-- Sin dependencias externas: solo System.Text.Json del shared framework. -->
+    <RootNamespace>DotNetLab.Contracts</RootNamespace>
+  </PropertyGroup>
+
+</Project>
