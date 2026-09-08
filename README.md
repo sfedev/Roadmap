@@ -153,7 +153,7 @@ Cada push a `main` dispara un workflow de CI con cuatro trabajos:
 |---|---|
 | **Build y tests** | Compila en Release, ejecuta las 49 pruebas y publica el frontend (ejercita el trimming del WASM) |
 | **Imágenes Docker** | Construye las tres imágenes, valida el compose y comprueba que el Worker vive sin broker |
-| **Manifiestos, Helm y Bicep** | `kubectl --dry-run`, `helm lint` + render de dev y prod, y `az bicep build` |
+| **Manifiestos, Helm y Bicep** | `kubeconform -strict`, `helm lint` + render de dev y prod validado, y `az bicep build` |
 | **Stack completo** | Levanta siete contenedores y recorre el flujo asíncrono de punta a punta, comprobando que el trabajo lo procesó **otro contenedor** y que la telemetría llega a Prometheus y Jaeger |
 
 ---

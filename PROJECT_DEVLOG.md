@@ -1,12 +1,14 @@
 # PROJECT_DEVLOG
 
-Registro de desarrollo de **DotNetLab**, el portal interactivo de la FASE 01 (Modern .NET y Docker).
+Registro de desarrollo de **DotNetLab**, el portal interactivo que explica Modern .NET, Docker,
+observabilidad, resiliencia, arquitectura dirigida por eventos y Kubernetes ejecutándolos de verdad.
 Cada entrada recoge **qué se implementó**, **qué decisión de arquitectura se tomó**, **por qué** y
 **qué alternativa se descartó**. Los problemas encontrados se documentan con su medición y su
 solución, no como anécdota.
 
 Formato: entradas en orden cronológico de implementación. Las versiones citadas son las reales del
-repositorio (.NET SDK 10.0.301, C# 14).
+repositorio (.NET SDK 10.0.3xx/10.0.4xx, C# 14). Las fases 0 a 5 construyen la Fase 01 del plan de
+estudio; las fases 6 y 7 la llevan a nivel de aplicación empresarial.
 
 ---
 

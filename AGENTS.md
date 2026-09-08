@@ -472,7 +472,7 @@ Key Vault vía CSI driver sin cambiar una línea de C#.
 **Antes de dar por bueno un manifiesto:**
 
 ```bash
-kubectl apply --dry-run=client -f k8s/
+kubeconform -strict -summary -kubernetes-version 1.31.0 k8s/
 ```
 
 ```bash
@@ -535,7 +535,7 @@ dotnet test
 Si tocaste infraestructura:
 
 ```bash
-kubectl apply --dry-run=client -f k8s/
+kubeconform -strict -summary -kubernetes-version 1.31.0 k8s/
 ```
 
 ```bash

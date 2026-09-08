@@ -194,8 +194,12 @@ helm template lab ./helm/dotnetlab -f helm/dotnetlab/values-prod.yaml --set secr
 ```
 
 ```bash
-kubectl apply --dry-run=client -f k8s/
+kubeconform -strict -summary -kubernetes-version 1.31.0 k8s/
 ```
+
+> `kubectl apply --dry-run=client` **no** vale sin cluster: pese a su nombre, contacta con el
+> servidor de API para descubrir los tipos de recurso. kubeconform valida contra los esquemas JSON
+> publicados, sin red.
 
 ### Azure (Bicep)
 
@@ -465,7 +469,7 @@ el campo.
 2. `dotnet test` — las 49 pruebas en verde.
 3. Si tocaste un endpoint, pruébalo con `curl` y comprueba el JSON.
 4. Si tocaste la UI, ábrela en el navegador y ejecuta el playground afectado.
-5. Si tocaste un manifiesto o el chart: `kubectl apply --dry-run=client -f k8s/` y `helm lint`.
+5. Si tocaste un manifiesto o el chart: `kubeconform -strict k8s/` y `helm lint helm/dotnetlab`.
 6. Si tocaste el Bicep: `az bicep build --file infrastructure/main.bicep`.
 7. Si el snippet de una tarjeta corresponde a código que has modificado, **actualízalo**: el portal
    afirma que sus fragmentos son código real del repositorio.
