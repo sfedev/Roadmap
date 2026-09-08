@@ -1,33 +1,28 @@
 # =============================================================================
 # Integración continua de DotNetLab.
 #
-# Dos trabajos independientes que corren en paralelo:
-#   1. build-and-test → compila la solución y ejecuta las 31 pruebas.
-#   2. docker         → construye las dos imágenes y arranca la de la API para
-#                       comprobar que responde de verdad.
+# Cuatro trabajos independientes:
+#   1. build-and-test  → compila la solución y ejecuta las pruebas.
+#   2. docker          → construye las tres imágenes y valida el compose.
+#   3. manifests       → valida los manifiestos de Kubernetes, el chart de Helm y el Bicep.
+#   4. integration     → levanta el stack COMPLETO y recorre el flujo asíncrono de punta a punta.
 #
-# El segundo trabajo existe porque los Dockerfile no se pueden verificar en una
-# máquina sin Docker: los runners de Ubuntu ya lo traen instalado.
+# El cuarto existe porque nada de lo anterior demuestra que las piezas encajen: se puede tener
+# tres imágenes correctas, un compose válido y un sistema que no funciona.
 # =============================================================================
 
 name: CI
 
 on:
-  # Cada push a main: es la rama que se despliega.
   push:
     branches: [main]
-  # Y cada pull request contra main, para que el fallo aparezca antes de fusionar.
   pull_request:
     branches: [main]
-  # Permite lanzarlo a mano desde la pestaña Actions sin tener que hacer un commit.
   workflow_dispatch:
 
-# Permisos mínimos: el workflow solo necesita leer el código, no escribir nada.
 permissions:
   contents: read
 
-# Cancela ejecuciones anteriores de la misma rama: en una serie de pushes seguidos
-# solo interesa el resultado del último.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -48,24 +43,21 @@ jobs:
       - name: Instalar el SDK de .NET
         uses: actions/setup-dotnet@v6
         with:
-          # Se lee de global.json en vez de fijar la versión aquí: una sola fuente
-          # de verdad para la banda del SDK en todo el repositorio.
+          # Se lee de global.json: una sola fuente de verdad para la banda del SDK.
           global-json-file: global.json
 
       - name: Restaurar dependencias
         run: dotnet restore
 
-      # --no-restore evita repetir el paso anterior. El repositorio compila con
-      # TreatWarningsAsErrors, así que un aviso nuevo tumba el build aquí.
+      # El repositorio compila con TreatWarningsAsErrors: un aviso nuevo tumba el build aquí.
       - name: Compilar en Release
         run: dotnet build --configuration Release --no-restore
 
       - name: Ejecutar las pruebas
         run: dotnet test --configuration Release --no-build --verbosity normal
 
-      # Publicar en Release ejercita el recorte de IL (trimming) del cliente
-      # WebAssembly, que es justo lo que hace la etapa 'publish' del Dockerfile.
-      # Si el trimming rompiese algo, se vería aquí y no en producción.
+      # Publicar ejercita el recorte de IL (trimming) del cliente WebAssembly, que es lo que
+      # hace la etapa 'publish' del Dockerfile. Si el trimming rompiera algo, se vería aquí.
       - name: Publicar el frontend (valida el trimming del WASM)
         run: dotnet publish src/DotNetLab.Web --configuration Release --no-build -o ./artifacts/web
 
@@ -80,49 +72,253 @@ jobs:
       - name: Descargar el código
         uses: actions/checkout@v7
 
-      # El contexto de build es la raíz del repositorio (el '.' final) porque ambos
-      # proyectos referencian DotNetLab.Contracts, que vive fuera de sus carpetas.
+      # El contexto de build es la raíz del repositorio (el '.' final) porque los tres
+      # proyectos referencian librerías que viven fuera de sus carpetas.
       - name: Construir la imagen de la API
         run: docker build -f src/DotNetLab.Api/Dockerfile -t dotnetlab-api:ci .
 
       - name: Construir la imagen del frontend
         run: docker build -f src/DotNetLab.Web/Dockerfile -t dotnetlab-web:ci .
 
-      # El compose declara un secret por fichero. En CI se genera uno desechable:
-      # nunca sale del runner y se destruye con él.
-      - name: Generar un secreto desechable para validar el compose
-        run: openssl rand -base64 32 > secrets/lab_shared_key.txt
+      - name: Construir la imagen del Worker
+        run: docker build -f src/DotNetLab.Worker/Dockerfile -t dotnetlab-worker:ci .
 
-      # 'config -q' resuelve el compose completo (variables, secrets, redes) y falla
-      # si hay un error de sintaxis o una referencia rota.
+      # Secretos desechables: nunca salen del runner y mueren con él.
+      - name: Generar secretos desechables
+        run: |
+          openssl rand -base64 32 > secrets/lab_shared_key.txt
+          openssl rand -base64 24 > secrets/rabbitmq_password.txt
+
+      # 'config -q' resuelve el compose completo (variables, secrets, redes) y falla si hay
+      # un error de sintaxis o una referencia rota.
       - name: Validar docker-compose.yml
         run: docker compose config -q
 
-      # Construir una imagen no demuestra que arranque. Este paso la ejecuta de verdad.
-      - name: Arrancar la API en un contenedor
-        run: docker run -d --name api-ci -p 8080:8080 dotnetlab-api:ci
+      # Construir una imagen no demuestra que arranque. Este paso ejecuta la del Worker sola,
+      # sin broker: debe quedarse viva esperando, no morir con un error de conexión.
+      - name: Arrancar el Worker aislado
+        run: docker run -d --name worker-ci -p 8082:8080 dotnetlab-worker:ci
 
-      # El HEALTHCHECK del Dockerfile tarda unos segundos en dar el primer veredicto,
-      # así que se sondea el endpoint con reintentos en vez de esperar a ciegas.
-      - name: Comprobar que responde el endpoint de salud
+      # La sonda de liveness NO depende del bus a propósito: si dependiera, un broker caído
+      # provocaría reinicios en bucle en vez de esperar a que vuelva.
+      - name: Comprobar que el Worker vive sin broker
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8080/api/diagnostics/health; then
-              echo ""
-              echo "La API respondió correctamente."
+            if curl -fsS http://localhost:8082/health/live > /dev/null; then
+              echo "El Worker responde a la sonda de liveness sin RabbitMQ, como debe."
               exit 0
             fi
             sleep 2
           done
-          echo "La API no respondió en 60 segundos."
+          echo "El Worker no respondió en 60 segundos."
           exit 1
 
-      # Los logs solo se vuelcan si algo falló: en caso de éxito son ruido.
-      - name: Volcar los logs del contenedor si falló
+      - name: Volcar los logs del Worker si falló
         if: failure()
-        run: docker logs api-ci
+        run: docker logs worker-ci
 
-      # always() garantiza la limpieza aunque el paso anterior haya fallado.
-      - name: Detener el contenedor
+      - name: Detener el Worker
         if: always()
-        run: docker rm -f api-ci
+        run: docker rm -f worker-ci
+
+  # ---------------------------------------------------------------------------
+  # Infraestructura como código
+  # ---------------------------------------------------------------------------
+  manifests:
+    name: Manifiestos, Helm y Bicep
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      # --- Kubernetes ---------------------------------------------------------
+      # --dry-run=client valida la sintaxis y el esquema SIN necesidad de un cluster.
+      # No detecta errores semánticos (una imagen que no existe), pero sí un campo mal escrito,
+      # que es el fallo que más tiempo hace perder.
+      - name: Validar los manifiestos de Kubernetes
+        run: |
+          for file in k8s/*.yaml; do
+            echo "Validando $file"
+            kubectl apply --dry-run=client --validate=false -f "$file"
+          done
+
+      # --- Helm ---------------------------------------------------------------
+      # helm lint detecta plantillas rotas y valores obligatorios que faltan.
+      - name: Analizar el chart de Helm
+        run: helm lint helm/dotnetlab
+
+      # 'template' RENDERIZA el chart: es lo que descubre un bucle mal cerrado o una función
+      # inexistente, cosas que lint no siempre ve.
+      - name: Renderizar el chart con los valores de desarrollo
+        run: helm template lab helm/dotnetlab -f helm/dotnetlab/values-dev.yaml > /tmp/render-dev.yaml
+
+      - name: Renderizar el chart con los valores de producción
+        # secrets.create=false en producción, así que hay que indicar el Secret externo o el
+        # chart fallaría al montarlo. Reproduce lo que haría el pipeline real.
+        run: |
+          helm template lab helm/dotnetlab -f helm/dotnetlab/values-prod.yaml \
+            --set secrets.existingSecret=dotnetlab-secrets \
+            --set image.registry=example.azurecr.io > /tmp/render-prod.yaml
+
+      # Lo renderizado tiene que ser Kubernetes VÁLIDO, no solo YAML bien formado.
+      - name: Validar la salida renderizada contra el esquema de Kubernetes
+        run: |
+          kubectl apply --dry-run=client --validate=false -f /tmp/render-dev.yaml
+          kubectl apply --dry-run=client --validate=false -f /tmp/render-prod.yaml
+
+      # Comprobación de una regla concreta: con autoescalado activo, el Deployment NO debe
+      # emitir 'replicas', o cada `helm upgrade` desharía el trabajo del HPA.
+      - name: Comprobar que el HPA no compite con replicas
+        run: |
+          if grep -A 40 'kind: Deployment' /tmp/render-prod.yaml | grep -q '^  replicas:'; then
+            echo "ERROR: el render de producción emite 'replicas' con el HPA activo."
+            exit 1
+          fi
+          echo "Correcto: con HPA activo no se emite 'replicas'."
+
+      # --- Bicep --------------------------------------------------------------
+      # az bicep build compila a ARM y falla ante cualquier error de sintaxis, tipo o
+      # referencia. Los runners de Ubuntu ya traen la CLI de Azure.
+      - name: Compilar las plantillas de Bicep
+        run: |
+          az bicep install
+          az bicep build --file infrastructure/main.bicep --outfile /tmp/main.json
+          echo "Bicep compilado a ARM correctamente."
+
+      # Los .bicepparam se validan aparte: es donde se detecta un parámetro mal escrito.
+      - name: Compilar los ficheros de parámetros
+        run: |
+          az bicep build-params --file infrastructure/parameters/dev.bicepparam --outfile /tmp/dev.parameters.json
+          az bicep build-params --file infrastructure/parameters/prod.bicepparam --outfile /tmp/prod.parameters.json
+
+  # ---------------------------------------------------------------------------
+  # Integración de punta a punta
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Stack completo (compose)
+    runs-on: ubuntu-latest
+    # Techo generoso: se construyen tres imágenes y se levantan siete contenedores.
+    timeout-minutes: 25
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      - name: Generar secretos desechables
+        run: |
+          openssl rand -base64 32 > secrets/lab_shared_key.txt
+          openssl rand -base64 24 > secrets/rabbitmq_password.txt
+
+      # Se levantan 'web', 'worker' y 'prometheus'; sus depends_on arrastran a la API, la cache,
+      # RabbitMQ, el colector y Jaeger. Grafana se omite: es solo interfaz y no se comprueba nada
+      # en ella, así que ahorra un contenedor en un runner de 2 vCPU.
+      - name: Levantar el stack
+        run: docker compose up -d --build web worker prometheus
+
+      - name: Esperar a que el portal responda
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8081/health/ready > /dev/null; then
+              echo "Frontend listo."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "El frontend no estuvo listo en 5 minutos."
+          exit 1
+
+      # Prueba de que la red interna funciona Y de que la sonda RESP a la cache responde: es lo
+      # que no se puede verificar construyendo imágenes por separado.
+      - name: Comprobar la API y la sonda a la cache
+        run: |
+          HEALTH=$(curl -fsS http://localhost:8080/api/diagnostics/health)
+          echo "$HEALTH"
+          echo "$HEALTH" | grep -q '"status":"Healthy"' || { echo "La API no está sana."; exit 1; }
+          echo "$HEALTH" | grep -q '"insideContainer":true' || { echo "No se detecta el contenedor."; exit 1; }
+          echo "$HEALTH" | grep -q '"reachable":true' || { echo "La cache no responde por la red interna."; exit 1; }
+
+      # EL CASO DE USO COMPLETO: el navegador (aquí curl) llama al frontend, este hace de proxy
+      # hacia la API, la API publica en RabbitMQ, el Worker consume y publica el resultado, y la
+      # API lo recoge en su registro. Si cualquier eslabón falla, este paso falla.
+      - name: Recorrer el flujo asíncrono de punta a punta
+        run: |
+          ACCEPTED=$(curl -fsS -X POST http://localhost:8081/api/analysis/jobs \
+            -H 'Content-Type: application/json' \
+            -d '{"rowCount":50000,"strategy":"span"}')
+          echo "202 Accepted: $ACCEPTED"
+
+          JOB_ID=$(echo "$ACCEPTED" | python3 -c 'import sys,json; print(json.load(sys.stdin)["jobId"])')
+
+          for i in $(seq 1 60); do
+            SNAPSHOT=$(curl -fsS "http://localhost:8080/api/analysis/jobs/$JOB_ID" || echo '{}')
+            STATUS=$(echo "$SNAPSHOT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
+
+            if [ "$STATUS" = "completed" ]; then
+              echo "$SNAPSHOT"
+
+              # El trabajo lo procesó OTRO contenedor: si workerInstance coincidiera con el
+              # hostname de la API, significaría que el bus no se usó y todo pasó en un proceso.
+              WORKER=$(echo "$SNAPSHOT" | python3 -c 'import sys,json; print(json.load(sys.stdin)["workerInstance"])')
+              API_HOST=$(docker compose exec -T api hostname | tr -d '\r\n')
+              echo "Procesado por '$WORKER'; la API es '$API_HOST'."
+              [ "$WORKER" != "$API_HOST" ] || { echo "ERROR: lo procesó la propia API, no el Worker."; exit 1; }
+
+              # Y lo hizo con la ruta de Span<T>: cero bytes asignados en el Heap.
+              BYTES=$(echo "$SNAPSHOT" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["allocatedBytes"])')
+              echo "Bytes asignados en el Heap: $BYTES"
+              [ "$BYTES" = "0" ] || { echo "ERROR: la ruta span asignó $BYTES bytes."; exit 1; }
+
+              exit 0
+            fi
+
+            if [ "$STATUS" = "failed" ]; then
+              echo "El trabajo falló: $SNAPSHOT"
+              exit 1
+            fi
+
+            sleep 2
+          done
+          echo "El trabajo no terminó en 2 minutos."
+          exit 1
+
+      # La telemetría tiene que haber recorrido su propia tubería: aplicación -> OTLP ->
+      # colector -> Prometheus. Se consulta el contador que emiten los parsers.
+      - name: Comprobar que las métricas llegan a Prometheus
+        run: |
+          for i in $(seq 1 30); do
+            RESULT=$(curl -fsS 'http://localhost:9090/api/v1/query?query=dotnetlab_parse_operations_total' || echo '{}')
+            COUNT=$(echo "$RESULT" | python3 -c 'import sys,json; print(len(json.load(sys.stdin).get("data",{}).get("result",[])))' 2>/dev/null || echo 0)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "Prometheus tiene $COUNT serie(s) de dotnetlab_parse_operations_total."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Las métricas no llegaron a Prometheus en 2,5 minutos."
+          exit 1
+
+      # Y las trazas al suyo: aplicación -> OTLP -> colector -> Jaeger.
+      - name: Comprobar que las trazas llegan a Jaeger
+        run: |
+          for i in $(seq 1 24); do
+            SERVICES=$(curl -fsS http://localhost:16686/api/services || echo '{}')
+            if echo "$SERVICES" | grep -q 'dotnetlab-api'; then
+              echo "Jaeger conoce los servicios: $SERVICES"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Las trazas no llegaron a Jaeger en 2 minutos."
+          exit 1
+
+      # Los logs completos solo si algo falló: en caso de éxito son cientos de líneas de ruido.
+      - name: Volcar los logs si algo falló
+        if: failure()
+        run: docker compose logs --tail 200
+
+      # always(): libera los recursos del runner pase lo que pase. -v borra también los
+      # volúmenes de Prometheus, que si no quedarían huérfanos.
+      - name: Derribar el stack
+        if: always()
+        run: docker compose down -v

@@ -1,9 +1,12 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/DotNetLab.Analysis/DotNetLab.Analysis.csproj" />
     <Project Path="src/DotNetLab.Api/DotNetLab.Api.csproj" />
     <Project Path="src/DotNetLab.Contracts/DotNetLab.Contracts.csproj" />
+    <Project Path="src/DotNetLab.ServiceDefaults/DotNetLab.ServiceDefaults.csproj" />
     <Project Path="src/DotNetLab.Web.Client/DotNetLab.Web.Client.csproj" />
     <Project Path="src/DotNetLab.Web/DotNetLab.Web.csproj" />
+    <Project Path="src/DotNetLab.Worker/DotNetLab.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/DotNetLab.Api.Tests/DotNetLab.Api.Tests.csproj" />
