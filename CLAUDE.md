@@ -106,6 +106,118 @@ docker build -f src/DotNetLab.Api/Dockerfile -t dotnetlab-api .
 > rutas de MSYS interpreta `/p:` como una ruta y MSBuild falla con `MSB1008`. Dentro del contenedor
 > (Linux) `/p:` funciona sin problema, que es como está escrito en los Dockerfile.
 
+### Observabilidad local
+
+Con `docker compose up`, además del portal quedan disponibles:
+
+| Herramienta | URL | Para qué |
+|---|---|---|
+| Jaeger | http://localhost:16686 | Trazas distribuidas. Servicios: `dotnetlab-web`, `dotnetlab-api`, `dotnetlab-worker` |
+| Prometheus | http://localhost:9090 | Métricas. Empieza por `dotnetlab_parse_allocated_bytes_bucket` |
+| Grafana | http://localhost:3000 | Paneles ya aprovisionados (admin/admin) |
+| RabbitMQ | http://localhost:15672 | Colas, mensajes pendientes y cola `_error` |
+
+Escalar el Worker para ver el reparto de trabajos entre réplicas:
+
+```bash
+docker compose up -d --scale worker=3 worker
+```
+
+> Los servicios exportan **solo OTLP** contra el colector. Sin `OTEL_EXPORTER_OTLP_ENDPOINT`
+> configurado, el exportador no se registra: es por lo que `dotnet run` en local no llena la
+> consola de errores de conexión.
+
+### Kubernetes en local (Kind o Minikube)
+
+```bash
+kind create cluster --name dotnetlab
+```
+
+Las imágenes se cargan en el cluster; sin esto, el kubelet intentaría descargarlas de un registro:
+
+```bash
+docker build -f src/DotNetLab.Api/Dockerfile -t dotnetlab-api:local .
+```
+
+```bash
+kind load docker-image dotnetlab-api:local dotnetlab-web:local dotnetlab-worker:local --name dotnetlab
+```
+
+Manifiestos sueltos (material de estudio, todo comentado):
+
+```bash
+kubectl apply -f k8s/
+```
+
+O el chart de Helm (la vía de despliegue real):
+
+```bash
+helm upgrade --install lab ./helm/dotnetlab -n dotnetlab --create-namespace -f helm/dotnetlab/values-dev.yaml
+```
+
+```bash
+kubectl -n dotnetlab get pods,svc,hpa
+```
+
+```bash
+kubectl -n dotnetlab port-forward svc/lab-dotnetlab-web 8081:8080
+```
+
+Diagnóstico habitual:
+
+```bash
+kubectl -n dotnetlab describe pod -l app.kubernetes.io/name=worker
+```
+
+```bash
+kubectl -n dotnetlab logs -l app.kubernetes.io/name=worker --tail 100 -f
+```
+
+```bash
+helm rollback lab -n dotnetlab
+```
+
+> El HPA necesita **metrics-server**; sin él se queda en `<unknown>` para siempre y sin dar ningún
+> error. En Minikube: `minikube addons enable metrics-server`.
+>
+> Las **NetworkPolicies** necesitan un CNI que las implemente (Calico, Cilium). Con el CNI por
+> defecto de Kind se crean pero no se aplican, que es el error más común al probarlas.
+
+### Validar sin desplegar
+
+```bash
+helm lint helm/dotnetlab
+```
+
+```bash
+helm template lab ./helm/dotnetlab -f helm/dotnetlab/values-prod.yaml --set secrets.existingSecret=dotnetlab-secrets
+```
+
+```bash
+kubectl apply --dry-run=client -f k8s/
+```
+
+### Azure (Bicep)
+
+```bash
+az bicep build --file infrastructure/main.bicep
+```
+
+```bash
+az group create -n rg-dotnetlab-dev -l switzerlandnorth
+```
+
+```bash
+az deployment group what-if -g rg-dotnetlab-dev -f infrastructure/main.bicep -p infrastructure/parameters/dev.bicepparam
+```
+
+```bash
+az deployment group create -g rg-dotnetlab-dev -f infrastructure/main.bicep -p infrastructure/parameters/dev.bicepparam
+```
+
+> Ejecuta **siempre** `what-if` antes de `create`: muestra exactamente qué se va a crear, modificar
+> o borrar. Es el equivalente de `terraform plan` y evita el susto de un recurso recreado.
+
 ### Diagnóstico rápido
 
 ```bash
@@ -116,21 +228,47 @@ curl -s "http://localhost:5280/api/performance/span-demo?rows=25000"
 curl -s "http://localhost:5280/api/diagnostics/health"
 ```
 
+```bash
+curl -s "http://localhost:5280/api/resilience/demo?scenario=circuit-breaker"
+```
+
+Encolar un trabajo asíncrono y seguir su estado:
+
+```bash
+curl -s -X POST http://localhost:5280/api/analysis/jobs -H "Content-Type: application/json" -d '{"rowCount":50000,"strategy":"span"}'
+```
+
+```bash
+curl -s "http://localhost:5280/api/analysis/jobs?take=5"
+```
+
 ---
 
 ## Estructura y responsabilidades
 
 ```
 src/
-  DotNetLab.Api/          Web API con Minimal APIs. Ejecuta todas las demostraciones.
-    Endpoints/            Un archivo por módulo pedagógico. Solo mapeo y validación.
-    Services/             La lógica real. Es lo que el portal enseña.
-    Infrastructure/       Transversal: logging generado, seguridad de la clave compartida.
-  DotNetLab.Contracts/    Records compartidos entre API y frontend. Sin lógica.
-  DotNetLab.Web/          Host Blazor: render de servidor, estáticos y proxy hacia la API.
-  DotNetLab.Web.Client/   Ensamblado WebAssembly: páginas interactivas y playgrounds.
+  DotNetLab.ServiceDefaults/  OpenTelemetry, health checks y resiliencia. La MISMA
+                              configuración para los tres procesos, en una línea.
+  DotNetLab.Analysis/         Dominio compartido API + Worker: parsers, generador y el
+                              consumidor de MassTransit del trabajo pesado.
+  DotNetLab.Contracts/        Records compartidos (HTTP y bus). Sin lógica.
+  DotNetLab.Api/              Web API con Minimal APIs. Acepta trabajos y los publica.
+    Endpoints/                Un archivo por módulo. Solo mapeo y validación.
+    Services/                 Lógica específica de la API (registro de trabajos, Polly).
+    Consumers/                Consume el resultado para actualizar su registro.
+    Infrastructure/           Logging generado, clave compartida, registro del bus.
+  DotNetLab.Worker/           Consume del bus y ejecuta el parseo. Solo expone /health/*.
+  DotNetLab.Web/              Host Blazor: render de servidor, proxy y hub de SignalR.
+    Realtime/                 Hub y consumidor puente bus -> navegador.
+  DotNetLab.Web.Client/       Ensamblado WebAssembly: páginas y playgrounds.
 tests/
-  DotNetLab.Api.Tests/    Unitarias de servicios + integración de endpoints.
+  DotNetLab.Api.Tests/        Unitarias de servicios + integración de endpoints y del bus.
+
+k8s/              Manifiestos comentados uno a uno (material de estudio CKAD).
+helm/dotnetlab/   Chart parametrizado (la vía de despliegue real).
+infrastructure/   Bicep: AKS, ACR, Key Vault, monitoring y Container Apps.
+observability/    Configuración del colector OTel, Prometheus y Grafana.
 ```
 
 Ver `AGENTS.md` para el mapa detallado y las guías paso a paso de extensión.
@@ -216,6 +354,64 @@ contra una lista blanca antes de resolverlas.
   `await`.
 - `ValueTask<T>` únicamente donde la ruta síncrona es la frecuente. En caso de duda, `Task<T>`.
 - Canales **siempre acotados** (`CreateBounded`). Un canal ilimitado es un `OutOfMemory` esperando.
+- **Calienta antes de medir.** Toda ruta que mida asignaciones debe llamar antes a `Warmup(...)`
+  con un fragmento pequeño. La primera ejecución paga la compilación del JIT por niveles, y ese
+  coste se imputa al hilo: sin calentar, el primer trabajo de un proceso reportaba 7.840 bytes en
+  una ruta que asigna 0 (ver reto 12 del devlog). **Nunca uses `Parse` para calentar**: ensuciaría
+  los histogramas de OpenTelemetry con muestras que nadie pidió.
+
+### Patrones de observabilidad
+
+1. **Instrumentos declarados UNA vez** en `LabTelemetry`, como campos estáticos. Crear un
+   `Counter` o un `Histogram` por operación filtra memoria: el `MeterProvider` los mantiene vivos.
+
+2. **El span se abre FUERA de la ventana medida.** Crear una `Activity` asigna; hacerlo dentro
+   falsearía la cifra que el portal presume de mantener en cero.
+
+3. **Elige el instrumento por la pregunta que responde:**
+   - `Counter<T>` → "cuántas veces ha ocurrido" (solo crece).
+   - `Histogram<T>` → "cómo se distribuye" (p50, p95, p99).
+   - `UpDownCounter<T>` → "cuántos hay ahora" (sube y baja).
+
+4. **Unidades según la convención semántica**: `By` para bytes, `s` para segundos (nunca
+   milisegundos), `{operation}` para conteos adimensionales.
+
+5. **Etiquetas de cardinalidad BAJA.** `strategy` (dos valores) sí; un `jobId` como etiqueta
+   crearía una serie temporal nueva por trabajo y reventaría Prometheus.
+
+### Patrones de resiliencia
+
+1. **Reintenta solo lo idempotente y lo transitorio.** Un 400 o un 401 reintentado da exactamente
+   el mismo error; un GET fallido por un pod reciclándose, no.
+
+2. **Nunca reintentos sin cortacircuitos.** Por sí solos AMPLIFICAN una caída: multiplican la carga
+   sobre el servicio que ya está mal.
+
+3. **Siempre jitter** (`UseJitter = true`). Sin él, N réplicas que fallan a la vez reintentan a la
+   vez y el pico se repite idéntico en cada ronda.
+
+4. **Filtra por tipo de excepción** en `ShouldHandle`. Un `NullReferenceException` es un bug:
+   reintentarlo cuatro veces solo esconde la causa.
+
+5. Las llamadas entre servicios usan `.AddLabResilience()` de `ServiceDefaults`. No configures
+   políticas ad hoc por cliente salvo que tengas una razón que puedas escribir en un comentario.
+
+### Patrones de mensajería
+
+1. **Los consumidores deben ser idempotentes.** RabbitMQ garantiza entrega *al menos una vez*: un
+   mismo mensaje puede llegar dos veces si el consumidor muere tras procesarlo y antes de confirmar.
+
+2. **`Publish` para eventos, `Send` para comandos.** `Publish` permite N suscriptores sin que el
+   emisor los conozca; es lo que hace que la API y el frontend reaccionen al mismo evento.
+
+3. **Valida en el borde, no en el consumidor.** Publicar un mensaje que solo puede acabar en la
+   cola de errores gasta transporte y cola para nada.
+
+4. **Los mensajes son contratos.** Viven en `DotNetLab.Contracts` y solo se les añaden campos
+   opcionales: quitar o renombrar uno rompe a los consumidores que aún no se han desplegado.
+
+5. **El instante de publicación viaja en el mensaje.** Es la única forma de calcular la latencia de
+   cola, que es la métrica que dice si el Worker necesita más réplicas.
 
 ---
 
@@ -256,17 +452,24 @@ var newLine = remaining.IndexOf('\n');
 Los comentarios son **breves** (una o dos líneas). Un comentario de cinco líneas suele significar
 que el código necesita un método con nombre, no un párrafo.
 
-Aplica igual a `.cs`, `.razor`, `Dockerfile`, `.yml` y `.json` de configuración.
+Aplica igual a `.cs`, `.razor`, `Dockerfile`, `.yml`, `.bicep`, las plantillas de Helm y los
+`.json` de configuración. En un manifiesto de Kubernetes, el comentario que importa es el que
+explica **por qué ese valor** (por qué 512Mi y no 256Mi, por qué `maxUnavailable: 0`), no qué hace
+el campo.
 
 ---
 
 ## Al terminar un cambio
 
 1. `dotnet build` — debe salir con **0 avisos**.
-2. `dotnet test` — las 31 pruebas en verde.
+2. `dotnet test` — las 49 pruebas en verde.
 3. Si tocaste un endpoint, pruébalo con `curl` y comprueba el JSON.
 4. Si tocaste la UI, ábrela en el navegador y ejecuta el playground afectado.
-5. Si el cambio revela algo no obvio (una medición sorprendente, una trampa del runtime), añade una
+5. Si tocaste un manifiesto o el chart: `kubectl apply --dry-run=client -f k8s/` y `helm lint`.
+6. Si tocaste el Bicep: `az bicep build --file infrastructure/main.bicep`.
+7. Si el snippet de una tarjeta corresponde a código que has modificado, **actualízalo**: el portal
+   afirma que sus fragmentos son código real del repositorio.
+8. Si el cambio revela algo no obvio (una medición sorprendente, una trampa del runtime), añade una
    entrada a `PROJECT_DEVLOG.md`.
 
 ---
@@ -290,5 +493,13 @@ Aplica igual a `.cs`, `.razor`, `Dockerfile`, `.yml` y `.json` de configuración
 - ❌ Introducir dependencias de CDN en el frontend.
 - ❌ Meter secretos en `appsettings.json`, en variables de entorno del compose o en cualquier capa
   de imagen. Van por fichero montado.
-- ❌ Publicar el puerto de la cache en el host.
+- ❌ Publicar el puerto de la cache o el AMQP de RabbitMQ en el host.
 - ❌ Escribir un comentario que repita lo que el código ya dice.
+- ❌ Medir asignaciones sin calentar antes el JIT, o calentar llamando al método instrumentado.
+- ❌ Emitir `replicas` en un Deployment que tiene HPA: cada `helm upgrade` desharía el autoescalado.
+- ❌ Poner una comprobación de dependencia externa en la sonda de **liveness**: una caída de esa
+  dependencia reiniciaría todos los pods en vez de sacarlos del balanceador.
+- ❌ Usar una etiqueta de métrica de cardinalidad alta (un `jobId`, un id de usuario): crea una
+  serie temporal por valor y revienta Prometheus.
+- ❌ Subir MassTransit a la rama 9: es de licencia comercial. La 8.5.10 es Apache-2.0.
+- ❌ Reintentar sin cortacircuitos, o reintentar errores 4xx.
