@@ -8,6 +8,15 @@
     <UserSecretsId>dotnetlab-web</UserSecretsId>
     <!-- Evita NavigationException al redirigir durante el prerender en servidor. -->
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- OBLIGATORIO para el build en Docker. blazor.web.js y blazor.server.js vienen del pack
+         Microsoft.AspNetCore.App.Internal.Assets, y el SDK solo lo descarga en el restore si en
+         ese momento hay ficheros .razor entre los Content (Microsoft.NET.Sdk.Web.ProjectSystem
+         .targets, propiedad RequiresAspNetWebAssets). La etapa 'restore' del Dockerfile copia
+         SOLO los .csproj para cachear los paquetes, así que no ve ningún .razor, el pack no entra
+         en project.assets.json y la imagen final sirve un 404 en /_framework/blazor.web.js: el
+         portal se renderiza pero nada es interactivo. Fijarlo a true desacopla la descarga de la
+         presencia de ficheros. -->
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
 
   <ItemGroup>

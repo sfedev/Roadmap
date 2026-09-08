@@ -852,6 +852,58 @@ Se corrigió el sondeo y, ya que el hallazgo era útil, se convirtió en una **a
 un endpoint protegido llamado sin cabecera debe responder 401. Si algún día respondiera 200, la
 protección estaría desactivada y nadie se habría enterado.
 
+#### Reto 24 · El portal en Docker se veía perfecto y no respondía a nada
+
+Reportado desde el navegador, no desde la CI: en el stack de `docker compose`, las pestañas no
+cambiaban, los botones de la guía de Docker no hacían nada y los enlaces del índice llevaban a la
+portada. Todo a la vez, en todas las páginas. La CI estaba en verde porque comprobaba que el HTML
+respondía 200 y que el proxy funcionaba, y ambas cosas eran ciertas.
+
+**Diagnóstico.** La consola del navegador tenía un único error:
+
+```
+GET /_framework/blazor.web.js → 404
+```
+
+Sin ese script no arranca ni el circuito de servidor ni WebAssembly: la página se renderiza
+entera en el servidor y se queda como HTML muerto. Dentro de la imagen, `wwwroot/_framework/`
+tenía los `.wasm` y `blazor.webassembly.js`, pero ni `blazor.web.js` ni `blazor.server.js`. Los
+dos vienen del mismo pack, `Microsoft.AspNetCore.App.Internal.Assets`, que en el host estaba en la
+caché de NuGet y en el contenedor **no aparecía ni en `project.assets.json`**.
+
+**Causa raíz**, en `Microsoft.NET.Sdk.Web.ProjectSystem.targets`, línea 103:
+
+```xml
+<RequiresAspNetWebAssets
+  Condition="'$(RequiresAspNetWebAssets)' == '' and @(Content->AnyHaveMetadataValue(Extension, .razor))">true</RequiresAspNetWebAssets>
+```
+
+El SDK **solo descarga ese pack durante el restore si en ese momento hay ficheros `.razor` entre
+los Content del proyecto**. La etapa `restore` del Dockerfile sigue la buena práctica de copiar
+únicamente los `.csproj` para cachear los paquetes, así que no ve ningún `.razor`; el pack no se
+descarga, y el `publish --no-restore` posterior no tiene de dónde sacar el script. En local nunca
+falló porque el restore ve el árbol completo.
+
+Es una interacción entre dos prácticas correctas por separado: la optimización de caché de Docker
+y la descarga condicional del SDK.
+
+**Solución:** `<RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>` en el csproj del host.
+La condición del SDK comprueba primero si la propiedad ya tiene valor, así que fijarla desacopla
+la descarga de la presencia de ficheros. Una línea, con el porqué encima.
+
+**Y la lección para la CI:** un `200 OK` en el HTML no demuestra que un portal funcione. Se
+añadió un paso que extrae del HTML la referencia a `blazor.web.<hash>.js` y comprueba que se
+sirve con 200. Es la aserción que faltaba: verifica que la interactividad *puede* arrancar.
+
+#### Reto 25 · Los enlaces del índice llevaban a la portada
+
+Un fallo independiente que el anterior tapaba. El índice de cada página usaba `href="#span"`, y
+`App.razor` declara `<base href="/">`. Según la resolución de URLs, un fragmento suelto se resuelve
+contra la **base**, no contra la página actual: `#span` → `/#span` → la portada. Ocurre con o sin
+Blazor. Solución: la ruta completa en el enlace, `modern-dotnet#span`. Nunca se había detectado
+porque en las pruebas de navegador se llegaba a las anclas escribiendo la URL, no pulsando el
+índice.
+
 ---
 
 ## Career & Resume Impact

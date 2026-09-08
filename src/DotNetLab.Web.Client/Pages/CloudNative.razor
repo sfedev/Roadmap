@@ -21,10 +21,12 @@
     </p>
 </header>
 
+@* Ruta completa y no solo "#id": con <base href="/">, un fragmento suelto se resuelve contra
+   la raíz y el enlace acaba en la portada. *@
 <nav class="toc" aria-label="Índice de conceptos">
     @foreach (var concept in ConceptCatalog.CloudNative)
     {
-        <a class="toc-link" href="#@concept.Id">
+        <a class="toc-link" href="@($"cloud-native#{concept.Id}")">
             <span aria-hidden="true">@concept.Icon</span> @concept.Title
         </a>
     }

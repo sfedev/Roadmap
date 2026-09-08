@@ -234,6 +234,22 @@ jobs:
           echo "El frontend no estuvo listo en 5 minutos."
           exit 1
 
+      # Que el HTML responda 200 no demuestra que el portal FUNCIONE: sin blazor.web.js no
+      # arranca ni el circuito ni WebAssembly, y la página se ve perfecta pero ningún botón hace
+      # nada. Ocurrió de verdad: la etapa 'restore' del Dockerfile copia solo los .csproj, y el
+      # SDK solo descarga el pack con ese script si ve ficheros .razor en el restore.
+      - name: Comprobar que la interactividad de Blazor puede arrancar
+        run: |
+          HTML=$(curl -fsS http://localhost:8081/modern-dotnet)
+          # La página debe referenciar el script CON huella (blazor.web.<hash>.js): sin huella
+          # significa que el asset no está en el manifiesto de MapStaticAssets.
+          SCRIPT=$(echo "$HTML" | grep -oE '_framework/blazor\.web\.[a-z0-9]+\.js' | head -1)
+          [ -n "$SCRIPT" ] || { echo "ERROR: la página no referencia blazor.web.js con huella."; exit 1; }
+          echo "Script referenciado: $SCRIPT"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8081/$SCRIPT")
+          [ "$CODE" = "200" ] || { echo "ERROR: $SCRIPT respondió $CODE."; exit 1; }
+          echo "blazor.web.js se sirve correctamente (HTTP $CODE)."
+
       # Prueba de que la red interna funciona Y de que la sonda RESP a la cache responde: es lo
       # que no se puede verificar construyendo imágenes por separado.
       - name: Comprobar la API y la sonda a la cache

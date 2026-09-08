@@ -519,6 +519,8 @@ Comprueba en el render que **el Deployment con HPA no emite `replicas`**: si lo 
 | Etiqueta de métrica con `jobId` o id de usuario | Prometheus explota por cardinalidad | Ese detalle va en un span, no en una métrica |
 | Subir MassTransit a 9.x | Licencia comercial (Massient, Inc.) | Quédate en 8.5.10, que es Apache-2.0 |
 | Bus en memoria en el **frontend** | Nunca recibe nada y parece que SignalR falla | El publicador está en otro proceso: el frontend solo admite `rabbitmq` |
+| Restore en Docker copiando solo los `.csproj` (proyecto Blazor) | `/_framework/blazor.web.js` → 404; la página se ve pero nada es interactivo | `<RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>` en el csproj del host: el SDK solo descarga ese pack si ve `.razor` en el restore |
+| `href="#id"` con `<base href="/">` | El enlace de ancla lleva a la portada | Ruta completa: `href="modern-dotnet#id"` |
 
 ---
 

@@ -24,11 +24,13 @@
     </p>
 </header>
 
-@* Índice lateral: navega a las anclas de las tarjetas sin recargar la página. *@
+@* Índice lateral: navega a las anclas de las tarjetas sin recargar la página.
+   El href lleva la RUTA de la página y no solo "#id": con <base href="/"> en App.razor, un
+   enlace de solo fragmento se resuelve contra la raíz y acaba en la portada. *@
 <nav class="toc" aria-label="Índice de conceptos">
     @foreach (var concept in ConceptCatalog.All)
     {
-        <a class="toc-link" href="#@concept.Id">
+        <a class="toc-link" href="@($"modern-dotnet#{concept.Id}")">
             <span aria-hidden="true">@concept.Icon</span> @concept.Title
         </a>
     }

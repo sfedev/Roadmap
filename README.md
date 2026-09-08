@@ -51,7 +51,7 @@ $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-
 ```
 
 ```powershell
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-Object byte[] 24; $rng.GetBytes($b); [Convert]::ToBase64String($b) | Out-File -Encoding ascii -NoNewline secretsabbitmq_password.txt
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-Object byte[] 24; $rng.GetBytes($b); [Convert]::ToBase64String($b) | Out-File -Encoding ascii -NoNewline secrets\rabbitmq_password.txt
 ```
 
 ```bash
