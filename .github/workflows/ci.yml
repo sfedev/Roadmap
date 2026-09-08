@@ -238,6 +238,8 @@ jobs:
       # que no se puede verificar construyendo imágenes por separado.
       - name: Comprobar la API y la sonda a la cache
         run: |
+          # /api/diagnostics/health va en el grupo PÚBLICO: lo consumen el HEALTHCHECK del
+          # contenedor y el kubelet, que no conocen el secreto compartido.
           HEALTH=$(curl -fsS http://localhost:8080/api/diagnostics/health)
           echo "$HEALTH"
           echo "$HEALTH" | grep -q '"status":"Healthy"' || { echo "La API no está sana."; exit 1; }
@@ -256,8 +258,11 @@ jobs:
 
           JOB_ID=$(echo "$ACCEPTED" | python3 -c 'import sys,json; print(json.load(sys.stdin)["jobId"])')
 
+          # El sondeo va por el PROXY del frontend (8081), no contra la API (8080): la API
+          # exige la clave compartida y curl no la tiene. Que un GET directo devuelva 401 es
+          # justamente la señal de que la protección funciona.
           for i in $(seq 1 60); do
-            SNAPSHOT=$(curl -fsS "http://localhost:8080/api/analysis/jobs/$JOB_ID" || echo '{}')
+            SNAPSHOT=$(curl -fsS "http://localhost:8081/api/analysis/jobs/$JOB_ID" || echo '{}')
             STATUS=$(echo "$SNAPSHOT" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || echo "")
 
             if [ "$STATUS" = "completed" ]; then
@@ -290,6 +295,15 @@ jobs:
 
       # La telemetría tiene que haber recorrido su propia tubería: aplicación -> OTLP ->
       # colector -> Prometheus. Se consulta el contador que emiten los parsers.
+      # Comprobación explícita de que la clave compartida se está aplicando: un endpoint
+      # protegido llamado sin cabecera DEBE responder 401. Si respondiera 200, la protección
+      # estaría desactivada sin que nadie se hubiera dado cuenta.
+      - name: Comprobar que la API rechaza el acceso sin clave
+        run: |
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/api/resilience/demo")
+          echo "GET directo a la API sin cabecera: HTTP $CODE"
+          [ "$CODE" = "401" ] || { echo "ERROR: se esperaba 401 y llegó $CODE."; exit 1; }
+
       - name: Comprobar que las métricas llegan a Prometheus
         run: |
           for i in $(seq 1 30); do
