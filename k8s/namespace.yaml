@@ -1,0 +1,60 @@
+# =============================================================================
+# Namespace de la aplicación. Aísla nombres, cuotas y políticas de red del resto del cluster:
+# dos releases en namespaces distintos pueden llamar "api" a sus servicios sin colisionar.
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dotnetlab
+  labels:
+    # Etiquetas recomendadas por Kubernetes (app.kubernetes.io/*). No son decorativas: kubectl,
+    # Helm y las herramientas de observabilidad las usan para agrupar recursos.
+    app.kubernetes.io/name: dotnetlab
+    app.kubernetes.io/part-of: dotnetlab
+    # Pod Security Admission: rechaza en admisión cualquier pod que pida privilegios, hostPath
+    # o capacidades extra. "restricted" es el nivel más estricto de los tres estándar.
+    pod-security.kubernetes.io/enforce: restricted
+    # "warn" avisa además en kubectl al aplicar algo que violaría el nivel, sin bloquear.
+    pod-security.kubernetes.io/warn: restricted
+---
+# =============================================================================
+# ResourceQuota: techo agregado del namespace. Sin ella, un HPA mal configurado puede
+# consumir la capacidad del cluster entero y dejar sin sitio al resto de aplicaciones.
+# =============================================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dotnetlab-quota
+  namespace: dotnetlab
+spec:
+  hard:
+    # La suma de las peticiones de todos los pods no puede superar estos valores.
+    requests.cpu: "4"
+    requests.memory: 4Gi
+    # Los límites pueden sobrepasar las peticiones (overcommit), pero también tienen techo.
+    limits.cpu: "8"
+    limits.memory: 8Gi
+    # Cota de objetos: evita que un bucle de despliegues cree miles de pods.
+    pods: "30"
+---
+# =============================================================================
+# LimitRange: valores por defecto para los contenedores que no declaren recursos.
+# Un pod sin requests entra en la clase QoS "BestEffort" y es el PRIMERO que el kubelet mata
+# cuando el nodo se queda sin memoria. Este objeto impide que eso ocurra por descuido.
+# =============================================================================
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dotnetlab-defaults
+  namespace: dotnetlab
+spec:
+  limits:
+    - type: Container
+      # Se aplica si el contenedor no especifica limits.
+      default:
+        cpu: 500m
+        memory: 512Mi
+      # Se aplica si el contenedor no especifica requests.
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi

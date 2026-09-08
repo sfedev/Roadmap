@@ -1,0 +1,211 @@
+# =============================================================================
+# Dependencias de infraestructura para ejecutar el laboratorio en un cluster local.
+#
+# AVISO: esta configuración es PARA LABORATORIO. Una réplica, sin persistencia y sin alta
+# disponibilidad. En producción no se despliegan así:
+#   · RabbitMQ  -> RabbitMQ Cluster Operator, o Azure Service Bus (cambiando UsingRabbitMq
+#                  por UsingAzureServiceBus en el registro de MassTransit).
+#   · Redis     -> Azure Cache for Redis, o el operador de Redis con réplicas y persistencia.
+# El Bicep de /infrastructure aprovisiona las alternativas gestionadas de Azure.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: broker
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  # Una sola réplica: sin cluster, sin quórum y sin espejado de colas.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/component: broker
+        app.kubernetes.io/part-of: dotnetlab
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # UID del usuario rabbitmq en la imagen oficial.
+        runAsUser: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: rabbitmq
+          # Etiqueta de versión fija (no "latest"): un broker que cambia de versión solo, en
+          # mitad de un despliegue, es una fuente de incidencias difíciles de reproducir.
+          image: rabbitmq:4-management-alpine
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: dotnetlab
+            - name: RABBITMQ_DEFAULT_PASS
+              # valueFrom + secretKeyRef: el valor NO aparece en el manifiesto ni en un
+              # `kubectl get deployment -o yaml`, solo la referencia al Secret.
+              valueFrom:
+                secretKeyRef:
+                  name: dotnetlab-secrets
+                  key: rabbitmq-password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # rabbitmq-diagnostics es la herramienta oficial: comprueba el estado interno del
+          # broker, no solo que el puerto acepte conexiones.
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "status"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+      volumes:
+        - name: data
+          # emptyDir: al morir el pod se pierden las colas. Para un laboratorio es aceptable;
+          # en producción sería un PersistentVolumeClaim o directamente un servicio gestionado.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/part-of: dotnetlab
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 15
+          volumeMounts:
+            # Con readOnlyRootFilesystem, Redis necesita un directorio escribible para su
+            # fichero de volcado, aunque la persistencia esté desactivada.
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+# -----------------------------------------------------------------------------
+# El stack de observabilidad (Prometheus, Grafana, Jaeger y el OpenTelemetry Collector) NO se
+# despliega con manifiestos a mano: son sistemas con CRDs, reglas de alerta y dashboards que se
+# instalan con sus charts oficiales, que además se mantienen solos:
+#
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm install obs prometheus-community/kube-prometheus-stack -n observability --create-namespace
+#
+#   helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+#   helm install jaeger jaegertracing/jaeger -n observability
+#
+#   helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+#   helm install otel open-telemetry/opentelemetry-collector -n observability \
+#     --set mode=deployment
+#
+# Reimplementarlos a mano aquí sería mantener una copia peor de algo que ya está resuelto.
+# Para verlos funcionando sin cluster, `docker compose up` levanta los cuatro configurados.
+# -----------------------------------------------------------------------------

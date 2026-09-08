@@ -1,0 +1,20 @@
+# =============================================================================
+# Aprovisionamiento de dashboards desde ficheros JSON versionados.
+# =============================================================================
+apiVersion: 1
+
+providers:
+  - name: dotnetlab
+    orgId: 1
+    folder: DotNetLab
+    type: file
+    # true = si alguien borra el panel en la UI, vuelve a aparecer al reiniciar. Es lo correcto
+    # para un dashboard versionado: la fuente de verdad es el fichero, no la base de datos.
+    disableDeletion: false
+    # Recarga cada 10 s: al editar el JSON, el cambio se ve sin reiniciar el contenedor.
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      # Reproduce en Grafana la estructura de carpetas del disco.
+      foldersFromFilesStructure: false

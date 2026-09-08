@@ -1,0 +1,83 @@
+# =============================================================================
+# Services: nombre DNS estable y balanceo para cada Deployment.
+#
+# Un pod cambia de IP en cada reinicio; el Service da un nombre fijo ("api", "web") que el DNS
+# interno del cluster resuelve. Es lo que permite que Api__BaseUrl sea http://api:8080 y no
+# una IP que caducaría en el primer despliegue.
+#
+# Los tres son ClusterIP (el tipo por defecto): solo accesibles DENTRO del cluster. La entrada
+# desde fuera la gestiona el Ingress, que es quien termina TLS y aplica el enrutado por host.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  type: ClusterIP
+  # El selector empareja por ETIQUETAS, no por nombre de Deployment: por eso un pod nuevo entra
+  # en el balanceo en cuanto arranca y su readiness pasa.
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      # Puerto del Service (el que se usa en la URL).
+      port: 8080
+      # Puerto del contenedor. Se nombra en vez de numerarse para que cambiarlo en el
+      # Deployment no obligue a tocar también este fichero.
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  # SignalR y el circuito de Blazor Server son conexiones CON ESTADO: si dos peticiones de la
+  # misma sesión caen en pods distintos, el circuito se rompe y la página se reconecta sola.
+  # La afinidad por IP de cliente las mantiene en el mismo pod.
+  # NOTA: no es la solución definitiva. Detrás de un NAT corporativo, muchos usuarios comparten
+  # IP y el reparto se desequilibra; lo correcto en producción es un backplane (Redis o Azure
+  # SignalR Service), que además sobrevive al reinicio del pod.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      # 3 horas: más que una sesión de trabajo típica en el portal.
+      timeoutSeconds: 10800
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  # El Worker NO recibe tráfico de usuarios: consume de RabbitMQ. Este Service existe solo
+  # para exponer las sondas y para que un ServiceMonitor de Prometheus pueda descubrir los pods.
+  type: ClusterIP
+  # ClusterIP: None (headless) sería lo suyo si solo hiciera falta descubrimiento, pero un
+  # ClusterIP normal permite además hacer port-forward a las sondas sin apuntar a un pod concreto.
+  selector:
+    app.kubernetes.io/name: worker
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

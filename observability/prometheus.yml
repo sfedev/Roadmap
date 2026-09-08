@@ -1,0 +1,42 @@
+# =============================================================================
+# Prometheus: base de datos temporal que RASPA (pull) las métricas, en vez de recibirlas.
+#
+# Consecuencia práctica del modelo pull: si un objetivo deja de responder, Prometheus lo sabe
+# y lo refleja en la métrica 'up'. Con un modelo push, un servicio muerto simplemente deja de
+# enviar y es indistinguible de uno que no tiene nada que contar.
+# =============================================================================
+
+global:
+  # Cada cuánto se raspan los objetivos. 15 s es el equilibrio habitual entre resolución y
+  # volumen de datos; bajarlo a 5 s triplica el almacenamiento sin aportar casi nada.
+  scrape_interval: 15s
+  # Cada cuánto se evalúan las reglas de alerta.
+  evaluation_interval: 15s
+  external_labels:
+    # Etiqueta que identifica esta instancia si varios Prometheus federan hacia uno central.
+    environment: docker-compose
+
+scrape_configs:
+  # --- Métricas de las aplicaciones -----------------------------------------
+  # No se raspan los servicios .NET directamente: ellos empujan por OTLP al colector, y es el
+  # colector quien las expone aquí. Así las aplicaciones no necesitan el exportador de
+  # Prometheus (que además sigue en beta) ni abrir un endpoint /metrics propio.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ['otel-collector:8889']
+        labels:
+          source: opentelemetry
+
+  # --- Salud del propio colector --------------------------------------------
+  # Métricas internas del colector: spans recibidos, rechazados y encolados. Es lo que dice si
+  # el problema está en la aplicación o en la tubería de telemetría.
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ['otel-collector:8888']
+        labels:
+          source: collector-self
+
+  # --- El propio Prometheus ---------------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

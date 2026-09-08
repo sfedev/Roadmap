@@ -1,0 +1,368 @@
+# =============================================================================
+# Cargas de trabajo de DotNetLab: API, frontend y Worker.
+#
+# Los tres comparten el mismo esqueleto de seguridad y sondas; lo que cambia es la imagen, el
+# número de réplicas y los recursos. Las imágenes llevan la etiqueta ":local" a propósito: en
+# un cluster real se sustituyen por las del registro (ACR) desde el chart de Helm o con
+# `kubectl set image`. Usar ":latest" haría imposible saber qué versión está corriendo.
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dotnetlab
+  namespace: dotnetlab
+# Ninguno de los tres servicios habla con la API de Kubernetes, así que no necesitan el token.
+# Montarlo sería regalar credenciales del cluster a un proceso que solo parsea texto.
+automountServiceAccountToken: false
+---
+# =============================================================================
+# API — Minimal APIs. Sin estado salvo el registro en memoria de trabajos, por lo que
+# escala horizontalmente (con la salvedad documentada en AGENTS.md sobre ese registro).
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  # El HPA gestiona este valor en caliente; aquí solo se fija el punto de partida.
+  replicas: 2
+  selector:
+    # El selector es INMUTABLE una vez creado el Deployment: cambiarlo obliga a borrarlo y
+    # recrearlo. Por eso se mantiene mínimo, con una sola etiqueta estable.
+    matchLabels:
+      app.kubernetes.io/name: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Un pod extra durante el despliegue: la capacidad no baja mientras se actualiza.
+      maxSurge: 1
+      # Cero pods de menos: con readiness probe correcta, el despliegue es sin corte.
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: dotnetlab
+    spec:
+      serviceAccountName: dotnetlab
+      automountServiceAccountToken: false
+      # 30 s para que Kestrel termine las peticiones en curso tras recibir SIGTERM. El
+      # ENTRYPOINT en forma exec del Dockerfile es lo que hace que la señal llegue al proceso.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        # Rechaza arrancar si la imagen intentara ejecutar como root, aunque el Dockerfile
+        # cambiara: es una comprobación en el nodo, no una promesa de la imagen.
+        runAsNonRoot: true
+        # UID del usuario "app" de las imágenes oficiales de .NET 8+.
+        runAsUser: 64198
+        runAsGroup: 64198
+        # Los ficheros de los volúmenes montados pertenecen a este grupo.
+        fsGroup: 64198
+        seccompProfile:
+          # Perfil seccomp por defecto del runtime: filtra llamadas al sistema peligrosas.
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: dotnetlab-api:local
+          # IfNotPresent permite trabajar con imágenes cargadas a mano en Kind/Minikube
+          # (kind load docker-image) sin que el kubelet intente descargarlas de un registro.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          # Toda la configuración no sensible entra de golpe desde el ConfigMap.
+          envFrom:
+            - configMapRef:
+                name: dotnetlab-config
+          securityContext:
+            # Ni siquiera un exploit de escalada puede ganar privilegios extra.
+            allowPrivilegeEscalation: false
+            # Sistema de ficheros de solo lectura: un atacante no puede dejar un binario.
+            readOnlyRootFilesystem: true
+            capabilities:
+              # Se quitan TODAS las capacidades de Linux; la app solo escucha en un puerto alto.
+              drop: ["ALL"]
+          resources:
+            # requests = lo que el scheduler reserva y la base del cálculo del HPA.
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            # limits = techo. Superar el de memoria provoca OOMKilled; el de CPU solo throttling.
+            # Se deja holgura porque los endpoints de rendimiento reservan MBs por llamada.
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          # STARTUP: da margen al arranque en frío sin relajar la sonda de liveness. Mientras
+          # esta no pase, las otras dos ni se ejecutan. 30 x 2 s = hasta 60 s para arrancar.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # LIVENESS: ¿el proceso responde? Si falla, el kubelet REINICIA el contenedor. Por eso
+          # apunta a /health/live, que no comprueba ninguna dependencia externa.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # READINESS: ¿puede recibir tráfico? Si falla, el pod sale del Service pero NO se
+          # reinicia. /health/ready sí incluye el estado del bus.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            # Los secretos se montan como FICHEROS, que es lo que la aplicación lee. Como
+            # variables de entorno aparecerían en `kubectl describe pod` y en los volcados.
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            # Con readOnlyRootFilesystem, .NET necesita un /tmp escribible para sus ficheros
+            # temporales (entre otros, el socket de diagnóstico). Sin esto el proceso falla.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: dotnetlab-secrets
+            # items explícitos: cada pod monta SOLO los secretos que usa, no el Secret entero.
+            items:
+              - key: shared-key
+                path: shared-key
+              - key: rabbitmq-password
+                path: rabbitmq-password
+            # 0400: solo lectura y solo para el propietario.
+            defaultMode: 0400
+        - name: tmp
+          # emptyDir en memoria: se borra al morir el pod y no toca el disco del nodo.
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+# =============================================================================
+# Frontend — host Blazor. Además de servir la UI, aloja el hub de SignalR.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: dotnetlab
+    spec:
+      serviceAccountName: dotnetlab
+      automountServiceAccountToken: false
+      # Más margen que la API: al recibir SIGTERM hay que dar tiempo a que los circuitos de
+      # Blazor Server y las conexiones de SignalR se cierren ordenadamente en el navegador.
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 64198
+        runAsGroup: 64198
+        fsGroup: 64198
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: dotnetlab-web:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: dotnetlab-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: dotnetlab-secrets
+            items:
+              - key: shared-key
+                path: shared-key
+              - key: rabbitmq-password
+                path: rabbitmq-password
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+# =============================================================================
+# Worker — consumidor del bus. No recibe tráfico HTTP de usuarios: su Service existe solo
+# para las sondas y para que Prometheus pueda descubrirlo.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      # A diferencia de la API, aquí SÍ se tolera un pod de menos: nadie espera una respuesta
+      # síncrona del Worker y los mensajes se quedan en la cola hasta que haya quien los tome.
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: dotnetlab
+    spec:
+      serviceAccountName: dotnetlab
+      automountServiceAccountToken: false
+      # 60 s: el Worker debe poder TERMINAR el mensaje que tiene entre manos antes de morir.
+      # Si lo matan a media faena, RabbitMQ lo reencola y otro pod lo procesa de nuevo, lo que
+      # con operaciones no idempotentes provocaría trabajo duplicado.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 64198
+        runAsGroup: 64198
+        fsGroup: 64198
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: dotnetlab-worker:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: dotnetlab-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 200m
+              # Más memoria que los otros dos: con PrefetchCount=4 puede tener cuatro buffers
+              # de telemetría vivos a la vez.
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # La readiness del Worker incluye el health check del bus que registra MassTransit:
+          # un Worker sin conexión al broker se marca como no listo, pero no se reinicia en
+          # bucle mientras RabbitMQ vuelve.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: dotnetlab-secrets
+            items:
+              - key: rabbitmq-password
+                path: rabbitmq-password
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

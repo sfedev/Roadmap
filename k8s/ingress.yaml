@@ -1,0 +1,66 @@
+# =============================================================================
+# Ingress: la única puerta de entrada desde fuera del cluster.
+#
+# Solo se publica el FRONTEND. La API no se expone a propósito: el host Blazor ya hace de
+# proxy hacia ella y es quien añade la clave compartida. Publicar también la API duplicaría la
+# superficie de ataque y dejaría un camino que se salta esa protección.
+#
+# Requiere un Ingress Controller instalado en el cluster:
+#   Kind:     kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+#   AKS:      el add-on de enrutamiento de aplicaciones, o ingress-nginx por Helm.
+# Sin controlador, este objeto se crea pero no hace absolutamente nada.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dotnetlab
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/part-of: dotnetlab
+  annotations:
+    # --- WebSockets ---------------------------------------------------------
+    # SignalR y el circuito de Blazor Server usan conexiones largas. Con el timeout por defecto
+    # de nginx (60 s) el navegador se reconectaría cada minuto y la página parpadearía.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # --- Afinidad de sesión --------------------------------------------------
+    # Cookie de afinidad en el balanceador: complementa al sessionAffinity del Service y es más
+    # precisa, porque distingue navegadores detrás de la misma IP pública.
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-name: "dotnetlab-affinity"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "10800"
+    # --- Seguridad y transporte ---------------------------------------------
+    # Redirige HTTP a HTTPS en el borde: el tráfico interno del cluster sigue en claro, que es
+    # lo normal cuando hay una malla o una red privada por debajo.
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # El endpoint de streaming de Channels emite eventos progresivamente; con el buffer activo
+    # nginx los acumularía y el cliente los recibiría todos de golpe al final.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Techo del cuerpo de una petición: el POST que encola un análisis son 100 bytes de JSON.
+    # Dejar el valor por defecto (1 MB) sería aceptar cuerpos mil veces mayores de lo necesario.
+    nginx.ingress.kubernetes.io/proxy-body-size: "64k"
+    # --- Certificado automático ----------------------------------------------
+    # Requiere cert-manager instalado y un ClusterIssuer llamado "letsencrypt-prod".
+    # Sin cert-manager, comenta esta línea y crea el Secret TLS a mano.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  # ingressClassName sustituye a la anotación kubernetes.io/ingress.class, obsoleta desde 1.18.
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - dotnetlab.local
+      # cert-manager crea y renueva este Secret; no hay que gestionarlo a mano.
+      secretName: dotnetlab-tls
+  rules:
+    - host: dotnetlab.local
+      http:
+        paths:
+          # Prefix "/" captura todo el sitio: la UI, el hub de SignalR (/hubs/jobs) y el proxy
+          # (/api/...). Una sola regla porque un único servicio sirve las tres cosas.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

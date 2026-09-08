@@ -1,101 +1,264 @@
 # =============================================================================
-# Entorno local completo: Web API + Blazor Web App + contenedor auxiliar (cache).
+# Entorno local completo: aplicación + mensajería + observabilidad.
 #
-#   1) Crea el secreto:  echo "una-clave-larga-y-aleatoria" > secrets/lab_shared_key.txt
-#   2) Levanta todo:     docker compose up --build
-#   3) Abre:             http://localhost:8081
+#   1) Crea los secretos:
+#        openssl rand -base64 32 > secrets/lab_shared_key.txt
+#        openssl rand -base64 24 > secrets/rabbitmq_password.txt
+#   2) Levanta todo:      docker compose up --build
+#   3) Abre el portal:    http://localhost:8081
 #
-# Nota: la clave 'version:' ya no se usa; Compose V2 la ignora y avisa si está presente.
+# Puertos publicados:
+#   8081  Portal Blazor           16686  Jaeger (trazas)
+#   8080  Web API (JSON crudo)     9090  Prometheus (métricas)
+#  15672  RabbitMQ (gestión)       3000  Grafana (paneles)
+#
+# La clave 'version:' ya no se usa; Compose V2 la ignora y avisa si está presente.
 # =============================================================================
 
 # --- Secretos ----------------------------------------------------------------
-# Compose monta cada secret como un fichero de solo lectura en /run/secrets/<nombre>.
-# Ventaja frente a una variable de entorno: NO aparece en 'docker inspect', ni en los logs
-# del orquestador, ni queda grabado en ninguna capa de la imagen.
+# Compose los monta como ficheros de solo lectura en /run/secrets/<nombre>. Frente a una
+# variable de entorno: NO aparecen en 'docker inspect', ni en los logs del orquestador, ni
+# quedan grabados en ninguna capa de imagen.
 secrets:
   lab_shared_key:
-    # El fichero está fuera del control de versiones (ver .gitignore): cada desarrollador
-    # genera el suyo, y en producción lo sustituye el gestor de secretos de la plataforma.
+    # Fuera del control de versiones (ver .gitignore): cada desarrollador genera el suyo.
     file: ./secrets/lab_shared_key.txt
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
 
 # --- Redes -------------------------------------------------------------------
 networks:
   labnet:
-    # Bridge definido por el usuario: aporta DNS interno, de modo que 'api' y 'cache'
-    # se resuelven por el NOMBRE del servicio. La red bridge por defecto no lo hace.
+    # Bridge definido por el usuario: aporta DNS interno, de modo que 'api', 'rabbitmq' o
+    # 'jaeger' se resuelven por el NOMBRE del servicio. La red bridge por defecto no lo hace.
     driver: bridge
+
+# --- Volúmenes ---------------------------------------------------------------
+volumes:
+  # Volumen con nombre para que los paneles y las series sobrevivan a un 'docker compose down'.
+  # Con 'down -v' sí se borran, que es la forma de empezar de cero.
+  prometheus-data:
+  grafana-data:
 
 services:
 
-  # ---------------------------------------------------------------------------
-  # Contenedor auxiliar: cache en memoria. La API le hace PING por TCP hablando RESP
-  # a pelo, sin librería cliente, para demostrar la comunicación entre contenedores.
-  # ---------------------------------------------------------------------------
+  # ===========================================================================
+  # INFRAESTRUCTURA
+  # ===========================================================================
+
+  # Cache en memoria. La API le hace PING por TCP hablando RESP a pelo, sin librería cliente,
+  # para demostrar la comunicación entre contenedores sin añadir una dependencia NuGet.
   cache:
     image: redis:7-alpine
-    # Nombre fijo para reconocerlo en 'docker ps' sin el prefijo del proyecto.
     container_name: dotnetlab-cache
-    # SIN 'ports': el servicio solo es accesible desde la red interna. Publicar el 6379
-    # en el host sería exponer una base de datos sin autenticación a toda la LAN.
-    networks:
-      - labnet
+    # SIN 'ports': solo accesible desde la red interna. Publicar el 6379 sería exponer una
+    # base de datos sin autenticación a toda la LAN.
+    networks: [labnet]
     healthcheck:
-      # redis-cli sí está dentro de esta imagen, así que la sonda usa su propio cliente.
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
-    # unless-stopped: sobrevive a reinicios del demonio, pero respeta un 'docker stop' manual.
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # Web API (Minimal APIs). Es quien ejecuta todas las demostraciones.
-  # ---------------------------------------------------------------------------
+  # Broker de mensajes. La imagen '-management' añade la interfaz web, que permite ver las
+  # colas, los mensajes pendientes y la cola de errores mientras se prueba el flujo asíncrono.
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: dotnetlab-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=dotnetlab
+      # _FILE es una convención de la imagen oficial: lee la contraseña del fichero indicado
+      # en vez de tomarla de la variable. Así el secreto no viaja como variable de entorno.
+      - RABBITMQ_DEFAULT_PASS_FILE=/run/secrets/rabbitmq_password
+    secrets:
+      - rabbitmq_password
+    ports:
+      # Solo la interfaz de gestión. El puerto AMQP (5672) NO se publica: lo usan los servicios
+      # por la red interna y no tiene por qué ser accesible desde el host.
+      - "15672:15672"
+    networks: [labnet]
+    healthcheck:
+      # rabbitmq-diagnostics comprueba el estado interno del broker, no solo que el puerto
+      # acepte conexiones: un broker arrancando responde al socket mucho antes de estar listo.
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      # El arranque de RabbitMQ es lento; sin start_period se acumularían fallos durante ese
+      # tiempo y el contenedor se marcaría como no sano antes de haber terminado de arrancar.
+      start_period: 30s
+    restart: unless-stopped
+
+  # ===========================================================================
+  # OBSERVABILIDAD
+  # ===========================================================================
+
+  # Colector de OpenTelemetry: recibe OTLP de los tres servicios y reparte. Es lo que permite
+  # que las aplicaciones no conozcan ni a Jaeger ni a Prometheus.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    container_name: dotnetlab-otel-collector
+    # --config apunta al fichero montado abajo; sin este argumento usa una configuración
+    # por defecto que no exporta a ninguna parte.
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      # :ro — el colector no debe poder modificar su propia configuración.
+      - ./observability/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    networks: [labnet]
+    depends_on:
+      # Sin condición de salud: Jaeger tarda poco y el colector reintenta la conexión solo.
+      - jaeger
+    restart: unless-stopped
+
+  # Almacén y visor de trazas distribuidas.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: dotnetlab-jaeger
+    environment:
+      # Habilita el receptor OTLP nativo (puertos 4317/4318). Desde la versión 1.35 no hace
+      # falta el protocolo propio de Jaeger, que además está obsoleto.
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      # Solo la interfaz web. Los puertos OTLP los usa el colector por la red interna.
+      - "16686:16686"
+    networks: [labnet]
+    restart: unless-stopped
+
+  # Base de datos temporal de métricas.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: dotnetlab-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Retención corta: es un laboratorio, no un histórico de capacidad.
+      - --storage.tsdb.retention.time=6h
+      # Necesario para que Grafana pueda saltar de una métrica a su traza (exemplars).
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [labnet]
+    restart: unless-stopped
+
+  # Paneles. Los orígenes de datos y el dashboard se aprovisionan por fichero, así que un
+  # 'down -v' no se lleva la configuración: vive en el repositorio, no en su base de datos.
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: dotnetlab-grafana
+    environment:
+      # Credenciales de laboratorio. En cualquier entorno compartido esto iría por secret.
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Sin registro de usuarios ni telemetría hacia grafana.com.
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks: [labnet]
+    depends_on:
+      - prometheus
+      - jaeger
+    restart: unless-stopped
+
+  # ===========================================================================
+  # APLICACIÓN
+  # ===========================================================================
+
+  # Web API. Acepta los trabajos y los publica en el bus; el trabajo pesado lo hace el Worker.
   api:
     build:
-      # Contexto = raíz del repositorio: la API referencia a DotNetLab.Contracts,
-      # que está fuera de su propia carpeta.
+      # Contexto = raíz del repositorio: la API referencia a DotNetLab.Contracts, a
+      # DotNetLab.Analysis y a DotNetLab.ServiceDefaults, todos fuera de su carpeta.
       context: .
       dockerfile: src/DotNetLab.Api/Dockerfile
     container_name: dotnetlab-api
     environment:
       # Configuración NO sensible: visible en 'docker inspect', y está bien que lo sea.
-      # El separador '__' es como ASP.NET Core mapea variables a claves jerárquicas:
-      # Cache__Host equivale a la clave "Cache:Host" de appsettings.json.
+      # El separador '__' es como ASP.NET Core mapea variables a claves jerárquicas.
       - ASPNETCORE_ENVIRONMENT=Production
       - Cache__Host=cache
       - Cache__Port=6379
       - Cache__Enabled=true
+      # rabbitmq (no inmemory): con el broker disponible, el consumidor vive en el Worker.
+      - Messaging__Transport=rabbitmq
+      - Messaging__Host=rabbitmq
+      - Messaging__Port=5672
+      - Messaging__Username=dotnetlab
+      - Messaging__PasswordFile=/run/secrets/rabbitmq_password
       # El sufijo __0 rellena el primer elemento de un array de configuración.
       - Cors__AllowedOrigins__0=http://localhost:8081
-      # La app recibe la RUTA del secreto, nunca su valor.
+      # La app recibe la RUTA del secreto, nunca el secreto.
       - SharedKey__File=/run/secrets/lab_shared_key
+      # Telemetría: solo OTLP contra el colector. La aplicación no conoce a Jaeger.
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
     secrets:
-      # Monta el secreto declarado arriba en /run/secrets/lab_shared_key.
       - lab_shared_key
+      - rabbitmq_password
     ports:
       # Publicado solo para poder inspeccionar el JSON crudo desde el host durante el
-      # aprendizaje. En un despliegue real, la API no se expondría: solo el frontend.
+      # aprendizaje. En un despliegue real la API no se expondría: solo el frontend.
       - "8080:8080"
-    networks:
-      - labnet
+    networks: [labnet]
     depends_on:
       cache:
-        # service_healthy y no el simple 'depends_on': espera a que el healthcheck de la
-        # cache pase, no solo a que el contenedor arranque.
+        # service_healthy y no el simple depends_on: espera a que la sonda pase, no solo a que
+        # el contenedor arranque.
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     restart: unless-stopped
-    # Límites de recursos: los endpoints de rendimiento reservan MBs por llamada, así que
-    # acotar la memoria evita que un bucle de peticiones afecte al resto de la máquina.
     deploy:
       resources:
         limits:
           cpus: "1.5"
           memory: 512M
 
-  # ---------------------------------------------------------------------------
-  # Blazor Web App: sirve el portal y hace de proxy hacia la API.
-  # ---------------------------------------------------------------------------
+  # Worker. Consume del bus y ejecuta el parseo con Span<T>. Es el ÚNICO servicio que se
+  # escala para procesar más rápido: `docker compose up --scale worker=3`.
+  worker:
+    build:
+      context: .
+      dockerfile: src/DotNetLab.Worker/Dockerfile
+    # Sin container_name: un nombre fijo impediría levantar varias réplicas con --scale.
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Messaging__Host=rabbitmq
+      - Messaging__Port=5672
+      - Messaging__Username=dotnetlab
+      - Messaging__PasswordFile=/run/secrets/rabbitmq_password
+      # Mensajes procesados a la vez por réplica. Subirlo sin subir el límite de memoria es la
+      # forma más rápida de provocar un OOM en el contenedor.
+      - Messaging__PrefetchCount=4
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+    secrets:
+      - rabbitmq_password
+    # SIN 'ports': el Worker no atiende tráfico de usuarios. Su puerto 8080 existe solo para
+    # las sondas de salud y es accesible desde la red interna.
+    networks: [labnet]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 512M
+
+  # Frontend Blazor: sirve el portal, hace de proxy hacia la API y aloja el hub de SignalR.
   web:
     build:
       context: .
@@ -109,17 +272,27 @@ services:
       # El mismo secreto que valida la API: el proxy lo añade como cabecera en el servidor,
       # de modo que el navegador nunca llega a verlo.
       - Api__SharedKeyFile=/run/secrets/lab_shared_key
+      # El frontend se suscribe al bus para notificar por SignalR el fin de los trabajos.
+      - Messaging__Transport=rabbitmq
+      - Messaging__Host=rabbitmq
+      - Messaging__Port=5672
+      - Messaging__Username=dotnetlab
+      - Messaging__PasswordFile=/run/secrets/rabbitmq_password
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
     secrets:
       - lab_shared_key
+      - rabbitmq_password
     ports:
       # Único puerto que un usuario necesita abrir: el portal.
       - "8081:8080"
-    networks:
-      - labnet
+    networks: [labnet]
     depends_on:
       api:
         # El frontend arranca cuando la API responde a su healthcheck, para que la primera
         # visita no se encuentre con errores de conexión durante el prerender en servidor.
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
     deploy:

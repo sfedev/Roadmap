@@ -1,0 +1,191 @@
+# =============================================================================
+# Valores por defecto del chart. Son los de un entorno de laboratorio; cada entorno real
+# sobrescribe lo suyo con -f values-dev.yaml o -f values-prod.yaml.
+#
+# Regla del chart: aquí NO hay ningún secreto. Los valores sensibles llegan por --set en el
+# pipeline, desde un Secret creado aparte o, en producción, desde Key Vault vía CSI driver.
+# =============================================================================
+
+# --- Imágenes ----------------------------------------------------------------
+image:
+  # Registro. Vacío = imágenes locales (Kind/Minikube con `kind load docker-image`).
+  # En Azure sería "miacr.azurecr.io".
+  registry: ""
+  # Etiqueta común. Vacía = se usa appVersion del Chart.yaml, que es lo correcto: la versión
+  # desplegada queda atada a la versión del chart y no a un "latest" que nadie sabe qué es.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Secret de tipo dockerconfigjson para registros privados. Vacío en local.
+imagePullSecrets: []
+
+# --- Configuración de la aplicación ------------------------------------------
+# Cada clave se convierte en una entrada del ConfigMap y llega como variable de entorno.
+# El separador "__" es como ASP.NET Core mapea variables a claves jerárquicas.
+config:
+  ASPNETCORE_ENVIRONMENT: Production
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  Cache__Host: redis
+  Cache__Port: "6379"
+  Cache__Enabled: "true"
+  Messaging__Transport: rabbitmq
+  Messaging__Host: rabbitmq
+  Messaging__Port: "5672"
+  Messaging__VirtualHost: "/"
+  Messaging__Username: dotnetlab
+  Messaging__PasswordFile: /run/secrets/rabbitmq-password
+  Messaging__PrefetchCount: "4"
+  SharedKey__File: /run/secrets/shared-key
+  Api__BaseUrl: "http://{{ .Release.Name }}-api:8080"
+  Api__SharedKeyFile: /run/secrets/shared-key
+
+# --- Secretos ----------------------------------------------------------------
+secrets:
+  # true = el chart CREA el Secret con los valores de abajo. Cómodo para dev, inaceptable en
+  # producción: los valores acabarían en el historial de la release y en cualquier `helm get`.
+  create: true
+  # Nombre de un Secret ya existente (creado por el pipeline, por SOPS o por el CSI driver).
+  # Si se indica, 'create' se ignora.
+  existingSecret: ""
+  # Solo se usan si create=true. En producción se pasan con --set o, mejor, no se usan.
+  sharedKey: "CAMBIAME-clave-de-desarrollo"
+  rabbitmqPassword: "CAMBIAME-password-de-desarrollo"
+
+# --- Componentes -------------------------------------------------------------
+# Los tres servicios comparten plantilla y se diferencian por estos valores. Un único
+# templates/deployment.yaml los recorre con 'range': añadir un cuarto servicio es añadir una
+# entrada aquí, no copiar 120 líneas de YAML.
+components:
+  api:
+    enabled: true
+    # Nombre de la imagen (sin registro ni etiqueta).
+    image: dotnetlab-api
+    replicaCount: 2
+    # Con 0 pods de menos durante el rollout, el despliegue es sin corte de servicio.
+    maxUnavailable: 0
+    terminationGracePeriodSeconds: 30
+    resources:
+      requests:
+        cpu: 100m
+        memory: 192Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    # Secretos que monta este componente. El Worker no necesita la clave compartida, así que
+    # no se le monta: cada pod ve solo lo suyo.
+    secretKeys:
+      - shared-key
+      - rabbitmq-password
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    # Afinidad de sesión: la API no la necesita, es completamente sin estado por petición.
+    sessionAffinity: None
+
+  web:
+    enabled: true
+    image: dotnetlab-web
+    replicaCount: 2
+    maxUnavailable: 0
+    # Más margen que la API: hay que dejar cerrar los circuitos de Blazor y SignalR.
+    terminationGracePeriodSeconds: 45
+    resources:
+      requests:
+        cpu: 100m
+        memory: 192Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi
+    secretKeys:
+      - shared-key
+      - rabbitmq-password
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 0
+    # SignalR y el circuito de Blazor Server tienen estado: sin afinidad, cada petición podría
+    # caer en un pod distinto y el circuito se rompería.
+    sessionAffinity: ClientIP
+
+  worker:
+    enabled: true
+    image: dotnetlab-worker
+    replicaCount: 2
+    # El Worker sí tolera un pod de menos: nadie espera una respuesta síncrona suya.
+    maxUnavailable: 1
+    # 60 s para poder TERMINAR el mensaje en curso antes de morir; si lo matan a medias,
+    # RabbitMQ lo reencola y otro pod repite el trabajo.
+    terminationGracePeriodSeconds: 60
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+    secretKeys:
+      - rabbitmq-password
+    autoscaling:
+      enabled: true
+      # Puede bajar a 1: sin trabajo en cola, un consumidor basta.
+      minReplicas: 1
+      maxReplicas: 8
+      targetCPUUtilizationPercentage: 75
+      targetMemoryUtilizationPercentage: 0
+    sessionAffinity: None
+
+# --- Ingress -----------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  # Solo se publica el frontend: la API queda detrás de su proxy, sin ruta desde fuera.
+  host: dotnetlab.local
+  tls:
+    enabled: true
+    secretName: dotnetlab-tls
+    # ClusterIssuer de cert-manager. Vacío = certificado gestionado a mano.
+    clusterIssuer: letsencrypt-prod
+  annotations:
+    # Conexiones largas de SignalR y del circuito de Blazor Server.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/session-cookie-name: dotnetlab-affinity
+    # Sin buffering, o el streaming de Channels llegaría de golpe al final.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-body-size: 64k
+
+# --- Seguridad ---------------------------------------------------------------
+# Se aplica a los tres componentes por igual; sobrescribirlo por componente sería crear
+# excepciones difíciles de auditar.
+podSecurityContext:
+  runAsNonRoot: true
+  # UID del usuario "app" de las imágenes oficiales de .NET 8+.
+  runAsUser: 64198
+  runAsGroup: 64198
+  fsGroup: 64198
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# --- Sondas ------------------------------------------------------------------
+# Rutas fijas que expone ServiceDefaults en los tres servicios.
+probes:
+  liveness: /health/live
+  readiness: /health/ready
+  # La sonda de arranque da margen al arranque en frío SIN relajar la de liveness:
+  # 30 intentos x 2 s = hasta 60 s antes de considerar que el pod no levanta.
+  startupFailureThreshold: 30
+  startupPeriodSeconds: 2

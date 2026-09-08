@@ -1,0 +1,125 @@
+# =============================================================================
+# NetworkPolicies: segmentación de red dentro del namespace.
+#
+# Por defecto, en Kubernetes CUALQUIER pod puede hablar con cualquier otro pod del cluster.
+# Estas políticas invierten esa premisa: primero se niega todo y luego se abre exactamente lo
+# que la arquitectura necesita. Así, un contenedor comprometido no puede moverse lateralmente
+# hasta RabbitMQ o Redis.
+#
+# REQUISITO: un CNI que las implemente (Calico, Cilium, Azure NPM). Con el CNI por defecto de
+# Kind, estos objetos se crean pero NO se aplican: es el error más común al probarlas.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: dotnetlab
+spec:
+  # podSelector vacío = TODOS los pods del namespace.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  # Sin bloque 'ingress': no se permite ninguna entrada. Las políticas son ADITIVAS, así que
+  # las siguientes van abriendo los caminos concretos sobre esta base.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-from-ingress
+  namespace: dotnetlab
+spec:
+  # Solo el frontend recibe tráfico de fuera.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Desde el namespace del Ingress Controller. Requiere que ese namespace tenga la
+        # etiqueta correspondiente (kubectl label ns ingress-nginx name=ingress-nginx).
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-from-web
+  namespace: dotnetlab
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  policyTypes:
+    - Ingress
+  ingress:
+    # La API solo acepta tráfico del frontend. Es lo que convierte en una regla de red la
+    # decisión de arquitectura de que el navegador nunca la llame directamente.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: web
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Excepción: el kubelet ejecuta las sondas desde la IP del NODO, no desde un pod, así que
+    # no encaja en ningún podSelector. Sin esta regla, las sondas fallarían y Kubernetes
+    # reiniciaría los pods en bucle: es el fallo clásico al estrenar NetworkPolicies.
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: broker-from-app
+  namespace: dotnetlab
+spec:
+  # RabbitMQ solo acepta conexiones de los tres servicios de la aplicación.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: api
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: web
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: worker
+      ports:
+        - protocol: TCP
+          port: 5672
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cache-from-api
+  namespace: dotnetlab
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    # Solo la API sondea la cache; ni el frontend ni el Worker la tocan.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: api
+      ports:
+        - protocol: TCP
+          port: 6379

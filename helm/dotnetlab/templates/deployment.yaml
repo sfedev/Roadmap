@@ -1,0 +1,132 @@
+{{/*
+=============================================================================
+Deployments de los tres servicios, generados con un único bucle.
+
+'range' sobre .Values.components evita triplicar 120 líneas de YAML casi idéntico: añadir un
+cuarto servicio es añadir una entrada en values.yaml. El precio es que las diferencias reales
+entre componentes tienen que expresarse como VALORES, no como YAML a medida — que es justo la
+disciplina que se busca.
+
+$ es la raíz del contexto: dentro del range, '.' pasa a ser el elemento iterado.
+=============================================================================
+*/}}
+{{- range $name, $component := .Values.components }}
+{{- if $component.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dotnetlab.componentName" (dict "root" $ "component" $name) }}
+  labels:
+    {{- include "dotnetlab.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  {{/* Con el HPA activo NO se emite 'replicas': si se emitiera, cada `helm upgrade`
+       devolvería el número de pods al valor del chart y desharía el autoescalado. */}}
+  {{- if not $component.autoscaling.enabled }}
+  replicas: {{ $component.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "dotnetlab.selectorLabels" (dict "root" $ "component" $name) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: {{ $component.maxUnavailable }}
+  template:
+    metadata:
+      labels:
+        {{- include "dotnetlab.selectorLabels" (dict "root" $ "component" $name) | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+      annotations:
+        {{/* Checksum del ConfigMap renderizado. Es el idioma estándar de Helm para forzar un
+             rollout cuando cambia la configuración: sin él, `helm upgrade` actualiza el
+             ConfigMap pero los pods siguen con los valores viejos hasta que alguien los
+             reinicia a mano, y el despliegue parece haber funcionado cuando no lo ha hecho. */}}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "dotnetlab.fullname" $ }}
+      {{/* Ninguno de los servicios habla con la API de Kubernetes: montar el token sería
+           regalar credenciales del cluster a un proceso que solo parsea texto. */}}
+      automountServiceAccountToken: false
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ $component.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "dotnetlab.image" (dict "root" $ "config" $component) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ include "dotnetlab.fullname" $ }}-config
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml $component.resources | nindent 12 }}
+          {{/* La sonda de arranque protege a la de liveness durante el arranque en frío:
+               mientras esta no pase, las otras dos ni se ejecutan. */}}
+          startupProbe:
+            httpGet:
+              path: {{ $.Values.probes.liveness }}
+              port: http
+            periodSeconds: {{ $.Values.probes.startupPeriodSeconds }}
+            failureThreshold: {{ $.Values.probes.startupFailureThreshold }}
+          {{/* LIVENESS: si falla, Kubernetes REINICIA el contenedor. Por eso apunta a una ruta
+               que no consulta ninguna dependencia externa. */}}
+          livenessProbe:
+            httpGet:
+              path: {{ $.Values.probes.liveness }}
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          {{/* READINESS: si falla, el pod sale del Service pero NO se reinicia. */}}
+          readinessProbe:
+            httpGet:
+              path: {{ $.Values.probes.readiness }}
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            {{/* readOnlyRootFilesystem obliga a dar un /tmp escribible: .NET lo necesita para
+                 sus ficheros temporales y el socket de diagnóstico. */}}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: {{ include "dotnetlab.secretName" $ }}
+            {{/* Cada componente monta SOLO las claves que usa: el Worker no ve la clave
+                 compartida del frontend. */}}
+            items:
+              {{- range $key := $component.secretKeys }}
+              - key: {{ $key }}
+                path: {{ $key }}
+              {{- end }}
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+{{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dotnetlab.fullname" . }}
+  labels:
+    {{- include "dotnetlab.labels" . | nindent 4 }}
+automountServiceAccountToken: false

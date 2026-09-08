@@ -1,0 +1,137 @@
+{
+  "//": "Dashboard de DotNetLab. Las consultas usan las métricas que emiten LabTelemetry y la instrumentación automática de ASP.NET Core, tras pasar por el colector: por eso los nombres llevan sufijos de Prometheus (_total, _bucket) que el código C# no escribe.",
+  "title": "DotNetLab · Rendimiento y trabajos",
+  "uid": "dotnetlab-main",
+  "tags": ["dotnetlab", "opentelemetry"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Memoria asignada por parseo (p95)",
+      "description": "Es la métrica central del proyecto: la ruta con Span<T> debe quedarse plana en 0 B mientras string.Split crece con el tamaño del lote. Un p95 distinto de cero en la serie 'span' significa que alguien introdujo una asignación en la ruta caliente.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(dotnetlab_parse_allocated_bytes_bucket[2m])) by (le, strategy))",
+          "legendFormat": "{{strategy}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Duración del parseo (p50 / p95)",
+      "description": "rate() sobre los buckets del histograma y luego histogram_quantile: es el orden obligatorio en Prometheus. Al revés se obtienen números sin sentido.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(dotnetlab_parse_duration_bucket[2m])) by (le, strategy))",
+          "legendFormat": "p50 {{strategy}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(dotnetlab_parse_duration_bucket[2m])) by (le, strategy))",
+          "legendFormat": "p95 {{strategy}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Trabajos asíncronos en vuelo",
+      "description": "UpDownCounter: sube al aceptar un trabajo y baja al completarlo. Si esta línea crece de forma sostenida, el Worker no da abasto y hay que escalarlo.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(dotnetlab_jobs_in_flight)",
+          "legendFormat": "en vuelo"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Trabajos completados por minuto",
+      "description": "Separados por resultado. Una tasa de 'failure' distinta de cero es la señal de alerta.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(dotnetlab_jobs_completed_total[2m])) by (result) * 60",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Intentos de resiliencia",
+      "description": "Reintentos, éxitos y cortes de circuito. Un pico de 'circuit-open' indica que Polly está protegiendo activamente a una dependencia caída.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(dotnetlab_resilience_attempts_total[2m])) by (outcome)",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Latencia HTTP del servidor (p95 por servicio)",
+      "description": "Métrica estándar de la instrumentación de ASP.NET Core, sin una línea de código propio. Comparar los tres servicios en el mismo panel es lo que localiza dónde se va el tiempo.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket[2m])) by (le, service_name))",
+          "legendFormat": "{{service_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Recolecciones del GC por generación",
+      "description": "De la instrumentación de runtime. Un crecimiento de Gen2 apunta a objetos que sobreviven a varias recolecciones: normalmente, una fuga o una caché sin techo.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(dotnet_gc_collections_total[5m])) by (gc_heap_generation, service_name)",
+          "legendFormat": "{{service_name}} {{gc_heap_generation}}"
+        }
+      ]
+    }
+  ]
+}

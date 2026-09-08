@@ -1,0 +1,151 @@
+# =============================================================================
+# Horizontal Pod Autoscaler (autoscaling/v2).
+#
+# El HPA compara el uso ACTUAL con el `requests` del contenedor, no con el `limits`. Un pod
+# con requests de 100m que consume 80m está al 80%: si el objetivo es 70%, el HPA escala.
+# De ahí que un `requests` mal puesto arruine el autoescalado aunque el HPA sea correcto.
+#
+# REQUISITO: el metrics-server debe estar instalado. En AKS viene de serie; en Kind o Minikube
+# hay que instalarlo aparte (`minikube addons enable metrics-server`) o el HPA se queda en
+# "unknown" para siempre sin dar ningún error evidente.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  # Dos réplicas mínimas: con una, cualquier reinicio o drenaje de nodo deja la API sin servicio.
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 70% deja margen para absorber un pico mientras arrancan los pods nuevos. Con un 90%
+          # el escalado llegaría siempre tarde, porque un pod tarda segundos en estar listo.
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          # La memoria es un criterio secundario aquí: el GC de .NET puede mantener el heap alto
+          # sin que haya presión real, así que el umbral se pone más arriba que el de CPU.
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      # Ventana corta al subir: ante un pico, escalar rápido es lo correcto.
+      stabilizationWindowSeconds: 30
+      policies:
+        # Como mucho duplica el número de pods cada 30 s.
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+      # Se aplica la política que MÁS pods permita añadir.
+      selectPolicy: Max
+    scaleDown:
+      # Cinco minutos de ventana al bajar. Sin ella aparece el "flapping": el HPA quita pods,
+      # la carga por pod sube, vuelve a añadirlos, y el cluster se pasa el día reciclando.
+      stabilizationWindowSeconds: 300
+      policies:
+        # Nunca más de un pod cada minuto hacia abajo.
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      # Ventana más larga que la de la API: al reducir réplicas del frontend se cortan circuitos
+      # de Blazor Server y conexiones de SignalR, y el usuario ve una reconexión.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: dotnetlab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  # Uno como mínimo: si no hay trabajo, un solo consumidor basta y sobra.
+  minReplicas: 1
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Umbral más alto que en la API: al Worker nadie le espera al otro lado de una
+          # petición HTTP, así que puede apurar más la CPU antes de necesitar compañía.
+          averageUtilization: 75
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+# -----------------------------------------------------------------------------
+# LIMITACIÓN CONOCIDA: escalar un consumidor de colas por CPU es una aproximación. La señal
+# correcta es la LONGITUD DE LA COLA (cuánto trabajo espera), no cuánto trabaja el pod que ya
+# hay. Un único pod saturado con 10.000 mensajes en cola marca el mismo 75% de CPU que con 10.
+#
+# La solución real es KEDA (Kubernetes Event-driven Autoscaling) con su scaler de RabbitMQ:
+#
+#   apiVersion: keda.sh/v1alpha1
+#   kind: ScaledObject
+#   spec:
+#     scaleTargetRef: { name: worker }
+#     triggers:
+#       - type: rabbitmq
+#         metadata:
+#           queueName: telemetry-analysis
+#           mode: QueueLength
+#           value: "20"          # un pod más por cada 20 mensajes pendientes
+#
+# KEDA además permite escalar a CERO cuando la cola está vacía, cosa que el HPA no hace.
+# Se deja fuera del repositorio porque exige instalar el operador en el cluster, y el objetivo
+# aquí es que los manifiestos funcionen en un Kind recién creado.
+# -----------------------------------------------------------------------------

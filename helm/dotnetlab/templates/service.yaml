@@ -1,0 +1,37 @@
+{{/*
+Un Service ClusterIP por componente habilitado. Da un nombre DNS estable ("<release>-api")
+que sobrevive a los reinicios de pods, que es lo que permite que Api__BaseUrl sea un nombre
+y no una IP condenada a caducar en el primer despliegue.
+*/}}
+{{- range $name, $component := .Values.components }}
+{{- if $component.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dotnetlab.componentName" (dict "root" $ "component" $name) }}
+  labels:
+    {{- include "dotnetlab.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dotnetlab.selectorLabels" (dict "root" $ "component" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      {{/* targetPort por NOMBRE: cambiar el puerto del contenedor no obliga a tocar esto. */}}
+      targetPort: http
+      protocol: TCP
+  {{- if eq $component.sessionAffinity "ClientIP" }}
+  {{/* Solo el frontend la necesita: SignalR y el circuito de Blazor Server tienen estado y
+       se romperían si dos peticiones de la misma sesión cayeran en pods distintos.
+       No es la solución definitiva (detrás de un NAT muchos usuarios comparten IP): lo
+       correcto en producción es un backplane con Redis o Azure SignalR Service. */}}
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  {{- end }}
+{{- end }}
+{{- end }}

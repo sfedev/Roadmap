@@ -1,0 +1,99 @@
+# =============================================================================
+# OpenTelemetry Collector.
+#
+# Por qué existe: las tres aplicaciones hablan SOLO OTLP y no conocen a Jaeger, a Prometheus ni
+# a Azure Monitor. El colector es quien traduce y reparte. La consecuencia práctica es que
+# cambiar de backend de observabilidad (o mandar la telemetría a dos a la vez) se hace aquí,
+# sin recompilar ni redesplegar una sola aplicación.
+#
+# Es además el patrón que se replica en Azure: el mismo colector, con el exporter
+# azuremonitor, envía a Application Insights.
+# =============================================================================
+
+receivers:
+  # Único receptor: OTLP, el protocolo estándar de OpenTelemetry.
+  otlp:
+    protocols:
+      # gRPC (4317): el que usan las aplicaciones .NET. Menos overhead por lote.
+      grpc:
+        # 0.0.0.0 y no localhost: dentro de un contenedor hay que escuchar en todas las
+        # interfaces o las conexiones desde otros contenedores no llegarían nunca.
+        endpoint: 0.0.0.0:4317
+      # HTTP (4318): para clientes que no puedan usar gRPC, como el SDK de JavaScript.
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # memory_limiter debe ir SIEMPRE el primero de la lista. Si el colector se queda sin memoria
+  # empieza a rechazar datos de forma controlada en vez de morir por OOM y perderlo todo.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    # Umbral de aviso: a 64 MiB por debajo del límite empieza a aplicar contrapresión.
+    spike_limit_mib: 64
+
+  # batch agrupa spans y métricas antes de exportarlos. Sin él se envía una petición por span,
+  # que es la forma más rápida de saturar tanto el colector como el backend.
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+  # Añade atributos a todo lo que pasa por el colector. Útil para marcar el origen cuando
+  # varios entornos comparten backend.
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: docker-compose
+        action: upsert
+
+exporters:
+  # --- Trazas -> Jaeger ------------------------------------------------------
+  # Jaeger admite OTLP de forma nativa desde la v1.35: ya no hace falta el exporter propio de
+  # Jaeger, que está obsoleto y fue eliminado del colector.
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      # Sin TLS dentro de la red interna de Docker. En un cluster real esto sería mTLS,
+      # normalmente proporcionado por la malla de servicio.
+      insecure: true
+
+  # --- Métricas -> Prometheus ------------------------------------------------
+  # El colector EXPONE un endpoint que Prometheus raspa (modelo pull), en vez de empujar los
+  # datos. Es como funciona Prometheus y permite que se entere si el colector deja de responder.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Añade las etiquetas del recurso OTel (service.name, service.instance.id) a cada serie:
+    # sin esto no se podría distinguir en Grafana qué servicio produjo cada métrica.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # --- Logs -> consola --------------------------------------------------------
+  # En el laboratorio los logs se quedan en la salida del colector. En producción irían a Loki,
+  # a Elastic o a Log Analytics, cambiando solo este bloque.
+  debug:
+    verbosity: basic
+
+service:
+  # Telemetría del PROPIO colector: sin ella, un colector saturado es invisible.
+  telemetry:
+    logs:
+      level: info
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # El orden importa: primero el limitador de memoria, después el enriquecido y por último
+      # el agrupado, que es lo que va justo antes de exportar.
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/jaeger]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [debug]

@@ -1,0 +1,91 @@
+# =============================================================================
+# Entorno de producción (AKS).
+#   helm upgrade --install lab ./helm/dotnetlab -n dotnetlab -f helm/dotnetlab/values-prod.yaml \
+#     --set image.registry=miacr.azurecr.io --set image.tag=1.4.2
+#
+# Diferencias con dev que importan: imágenes versionadas desde ACR, secretos EXTERNOS,
+# autoescalado activo y TLS gestionado.
+# =============================================================================
+
+image:
+  # Se pasa por --set desde el pipeline: el registro depende de la suscripción, no del código.
+  registry: ""
+  # Vacío = appVersion del Chart.yaml. NUNCA "latest": sin etiqueta inmutable es imposible
+  # saber qué versión está corriendo ni hacer un rollback fiable.
+  tag: ""
+  # Always garantiza que se descargue la imagen del registro y no se reutilice una copia
+  # antigua cacheada en el nodo.
+  pullPolicy: Always
+
+imagePullSecrets: []
+
+config:
+  ASPNETCORE_ENVIRONMENT: Production
+  # Colector desplegado en el namespace de observabilidad del cluster.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+
+secrets:
+  # El chart NO crea el Secret: lo aporta el pipeline, SOPS/Sealed Secrets o el Secrets Store
+  # CSI Driver sincronizando desde Azure Key Vault. Un valor pasado por --set quedaría
+  # registrado en el historial de la release y lo leería cualquiera con `helm get values`.
+  create: false
+  existingSecret: dotnetlab-secrets
+
+components:
+  api:
+    replicaCount: 3
+    autoscaling:
+      enabled: true
+      # Tres mínimas: sobrevive a perder un nodo entero sin degradar el servicio.
+      minReplicas: 3
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: 80
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+  web:
+    replicaCount: 3
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 12
+      targetCPUUtilizationPercentage: 65
+      targetMemoryUtilizationPercentage: 0
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+  worker:
+    replicaCount: 2
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 0
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  # Host real del entorno; se sobrescribe por --set en cada suscripción.
+  host: dotnetlab.example.com
+  tls:
+    enabled: true
+    secretName: dotnetlab-tls
+    clusterIssuer: letsencrypt-prod

@@ -1,0 +1,72 @@
+# =============================================================================
+# Entorno de desarrollo (Kind, Minikube o Docker Desktop).
+#   helm install lab ./helm/dotnetlab -n dotnetlab --create-namespace -f helm/dotnetlab/values-dev.yaml
+#
+# Prioriza arrancar rápido y gastar poco: sin autoescalado, una réplica y sin TLS.
+# =============================================================================
+
+image:
+  # Sin registro: se usan imágenes locales cargadas con `kind load docker-image`.
+  registry: ""
+  tag: local
+  # Never sería más estricto, pero IfNotPresent permite además probar imágenes de un registro
+  # sin cambiar el fichero.
+  pullPolicy: IfNotPresent
+
+config:
+  # Development activa OpenAPI y sube el detalle de los logs.
+  ASPNETCORE_ENVIRONMENT: Development
+  # Sin colector local, el exportador no se registra y no hay errores de conexión en consola.
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+secrets:
+  # En desarrollo el chart crea el Secret: es cómodo y los valores no son reales.
+  create: true
+  sharedKey: "dev-shared-key-no-usar-en-produccion"
+  rabbitmqPassword: "dev-rabbit-password"
+
+components:
+  api:
+    replicaCount: 1
+    autoscaling:
+      # Sin metrics-server en un Kind recién creado, un HPA activo solo añade ruido.
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi
+  web:
+    replicaCount: 1
+    autoscaling:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+  worker:
+    replicaCount: 1
+    autoscaling:
+      enabled: false
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: dotnetlab.local
+  tls:
+    # Sin cert-manager en local: se accede por HTTP.
+    enabled: false
+    secretName: ""
+    clusterIssuer: ""

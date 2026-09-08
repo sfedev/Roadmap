@@ -1,0 +1,19 @@
+{{/*
+Configuración no sensible de los tres servicios.
+
+Los valores pasan por 'tpl' para que puedan contener expresiones de plantilla: así
+Api__BaseUrl puede escribirse como "http://{{ .Release.Name }}-api:8080" en values.yaml y
+resolverse al nombre real del Service de esta release.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dotnetlab.fullname" . }}-config
+  labels:
+    {{- include "dotnetlab.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.config }}
+  {{/* quote evita que YAML interprete "true" o "6379" como booleano o número: un ConfigMap
+       solo admite cadenas, y sin comillas Helm fallaría al renderizar. */}}
+  {{ $key }}: {{ tpl (toString $value) $ | quote }}
+  {{- end }}

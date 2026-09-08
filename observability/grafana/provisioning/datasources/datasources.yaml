@@ -1,0 +1,34 @@
+# =============================================================================
+# Orígenes de datos aprovisionados por fichero.
+#
+# Aprovisionar (en vez de configurar a mano en la UI) hace que el entorno sea reproducible: un
+# `docker compose down -v` no se lleva la configuración, porque no vive en la base de datos de
+# Grafana sino en este fichero versionado.
+# =============================================================================
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    # Origen por defecto: es el que se abre al crear un panel nuevo.
+    isDefault: true
+    access: proxy
+    # Nombre del servicio en la red de Docker, no localhost: Grafana corre en su propio
+    # contenedor y "localhost" sería el suyo.
+    url: http://prometheus:9090
+    jsonData:
+      # Debe coincidir con el scrape_interval de Prometheus para que Grafana calcule bien los
+      # rangos por defecto de las funciones rate().
+      timeInterval: 15s
+      # Enlaza una métrica con su traza: al ver un pico de latencia se salta al span concreto.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: jaeger
+
+  - name: Jaeger
+    type: jaeger
+    # UID fijo: es lo que permite referenciarlo desde el origen de Prometheus de arriba y desde
+    # los paneles. Sin UID fijo, Grafana genera uno aleatorio y los enlaces se rompen.
+    uid: jaeger
+    access: proxy
+    url: http://jaeger:16686

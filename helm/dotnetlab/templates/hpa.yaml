@@ -1,0 +1,63 @@
+{{/*
+HPA por componente, solo para los que lo tengan activado.
+
+Recordatorio importante: el HPA compara el uso con el 'requests' del contenedor, no con el
+'limits'. Un requests demasiado alto hace que el porcentaje nunca suba y el HPA no escale
+jamás; demasiado bajo, y escala sin necesidad. Ajustar el autoescalado es, sobre todo,
+ajustar los requests.
+
+Requiere metrics-server instalado; sin él, el HPA se queda en "unknown" sin dar ningún error.
+*/}}
+{{- range $name, $component := .Values.components }}
+{{- if and $component.enabled $component.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "dotnetlab.componentName" (dict "root" $ "component" $name) }}
+  labels:
+    {{- include "dotnetlab.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "dotnetlab.componentName" (dict "root" $ "component" $name) }}
+  minReplicas: {{ $component.autoscaling.minReplicas }}
+  maxReplicas: {{ $component.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $component.autoscaling.targetCPUUtilizationPercentage }}
+    {{/* La métrica de memoria es opcional: con 0 no se emite. En .NET suele ser mala señal de
+         autoescalado, porque el GC puede mantener el heap alto sin que haya presión real. */}}
+    {{- if gt (int $component.autoscaling.targetMemoryUtilizationPercentage) 0 }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $component.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+  behavior:
+    scaleUp:
+      {{/* Ventana corta al subir: ante un pico, escalar tarde es peor que escalar de más. */}}
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      {{/* Ventana larga al bajar: evita el "flapping" de quitar pods, subir la carga por pod
+           y volver a añadirlos en bucle. */}}
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+{{- end }}
+{{- end }}

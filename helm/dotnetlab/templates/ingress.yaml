@@ -1,0 +1,46 @@
+{{/*
+Ingress: única entrada desde fuera del cluster, y solo hacia el frontend.
+
+La API no se publica a propósito. El host Blazor ya hace de proxy hacia ella y es quien añade
+la clave compartida; exponerla además por el Ingress abriría un camino que se salta esa
+protección.
+*/}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "dotnetlab.fullname" . }}
+  labels:
+    {{- include "dotnetlab.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{/* La anotación de cert-manager solo se emite si hay ClusterIssuer configurado: sin
+         cert-manager instalado, dejarla puesta bloquea la emisión del certificado y el
+         Ingress se queda sin TLS sin decir por qué. */}}
+    {{- if and .Values.ingress.tls.enabled .Values.ingress.tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.clusterIssuer | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{/* Prefix "/" cubre la UI, el hub de SignalR (/hubs/jobs) y el proxy (/api/...):
+               un único servicio sirve las tres cosas, así que sobra con una regla. */}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "dotnetlab.componentName" (dict "root" . "component" "web") }}
+                port:
+                  name: http
+{{- end }}

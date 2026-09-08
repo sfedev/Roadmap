@@ -1,0 +1,34 @@
+# =============================================================================
+# Chart de DotNetLab: empaqueta los tres servicios y su configuración en una única unidad
+# instalable y versionada. Frente a los manifiestos sueltos de /k8s aporta tres cosas que
+# `kubectl apply` no da: valores por entorno, historial de releases con rollback
+# (`helm rollback`) y borrado atómico de todo lo instalado.
+# =============================================================================
+apiVersion: v2
+name: dotnetlab
+description: Portal interactivo de Modern .NET, Docker y Kubernetes (API, frontend y Worker)
+
+# "application" y no "library": este chart despliega recursos, no solo aporta plantillas.
+type: application
+
+# version = versión del CHART (su estructura). Sube al cambiar plantillas o valores.
+version: 0.2.0
+
+# appVersion = versión de la APLICACIÓN empaquetada. Es el valor por defecto de la etiqueta de
+# imagen, así que separarlo de 'version' permite publicar un cambio de plantilla sin tocar el
+# código, y al revés.
+appVersion: "0.2.0"
+
+keywords:
+  - dotnet
+  - blazor
+  - kubernetes
+  - opentelemetry
+  - masstransit
+
+maintainers:
+  - name: Sergio Rayo
+
+# Versiones de Kubernetes soportadas. autoscaling/v2 (el HPA con 'behavior') exige 1.23+;
+# se pide 1.27 porque es la primera con soporte estable de todo lo que usa el chart.
+kubeVersion: ">=1.27.0-0"

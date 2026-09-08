@@ -1,0 +1,53 @@
+# =============================================================================
+# Configuración NO sensible de los tres servicios.
+#
+# ConfigMap y no variables sueltas en el Deployment: así la configuración se cambia y se
+# versiona por separado de la imagen. Cambiar un valor aquí NO reinicia los pods por sí solo
+# (ver la anotación checksum/config del Deployment, que es lo que fuerza el rollout).
+#
+# Las claves usan el separador "__" porque es como ASP.NET Core mapea una variable de entorno
+# a una clave jerárquica de configuración: Cache__Host equivale a "Cache:Host".
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dotnetlab-config
+  namespace: dotnetlab
+  labels:
+    app.kubernetes.io/part-of: dotnetlab
+data:
+  # --- Común a los tres servicios -------------------------------------------
+  ASPNETCORE_ENVIRONMENT: "Production"
+  # Endpoint del OpenTelemetry Collector. Los servicios NO conocen Jaeger ni Prometheus:
+  # hablan OTLP contra el colector y este reparte. Cambiar a Azure Monitor es cambiar esta URL.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+  # gRPC en vez de HTTP: menos overhead por lote de spans dentro del cluster.
+  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+
+  # --- API ------------------------------------------------------------------
+  # Nombre del Service de la cache; lo resuelve el DNS interno del cluster.
+  Cache__Host: "redis"
+  Cache__Port: "6379"
+  Cache__Enabled: "true"
+  # Transporte del bus. En Kubernetes SIEMPRE rabbitmq: con "inmemory" la API alojaría el
+  # consumidor y el Worker se quedaría sin trabajo que hacer.
+  Messaging__Transport: "rabbitmq"
+  Messaging__Host: "rabbitmq"
+  Messaging__Port: "5672"
+  Messaging__VirtualHost: "/"
+  Messaging__Username: "dotnetlab"
+  # Ruta del fichero que monta el Secret. La aplicación lee la RUTA, nunca el valor.
+  Messaging__PasswordFile: "/run/secrets/rabbitmq-password"
+  SharedKey__File: "/run/secrets/shared-key"
+  # Origen permitido por CORS: el host público del Ingress.
+  Cors__AllowedOrigins__0: "https://dotnetlab.local"
+
+  # --- Frontend -------------------------------------------------------------
+  # URL interna de la API: nombre del Service y puerto del contenedor (no el del Ingress).
+  Api__BaseUrl: "http://api:8080"
+  Api__SharedKeyFile: "/run/secrets/shared-key"
+
+  # --- Worker ---------------------------------------------------------------
+  # Mensajes procesados a la vez por réplica. Sube el throughput por pod, pero también la
+  # memoria simultánea: con 4 buffers de 200.000 filas se rozan los 512Mi del límite.
+  Messaging__PrefetchCount: "4"

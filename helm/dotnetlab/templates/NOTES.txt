@@ -1,0 +1,31 @@
+{{/* Mensaje que Helm imprime tras instalar. Su función es que quien acaba de desplegar sepa
+     QUÉ hacer ahora, sin tener que abrir el README. */}}
+DotNetLab {{ .Chart.AppVersion }} desplegado como release "{{ .Release.Name }}" en el namespace {{ .Release.Namespace }}.
+
+Componentes activos:
+{{- range $name, $component := .Values.components }}
+{{- if $component.enabled }}
+  · {{ $name }} — imagen {{ include "dotnetlab.image" (dict "root" $ "config" $component) }}{{ if $component.autoscaling.enabled }} (autoescalado {{ $component.autoscaling.minReplicas }}-{{ $component.autoscaling.maxReplicas }}){{ else }} ({{ $component.replicaCount }} réplica/s){{ end }}
+{{- end }}
+{{- end }}
+
+Comprobar que los pods están listos:
+  kubectl -n {{ .Release.Namespace }} get pods -w
+
+{{ if .Values.ingress.enabled -}}
+Acceso por Ingress:
+  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+
+  Requiere un Ingress Controller instalado y que el host resuelva. En local, añade a hosts:
+    127.0.0.1  {{ .Values.ingress.host }}
+{{- else -}}
+Ingress desactivado. Acceso por port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "dotnetlab.componentName" (dict "root" . "component" "web") }} 8081:8080
+  Abre http://localhost:8081
+{{- end }}
+
+{{ if and .Values.secrets.create (not .Values.secrets.existingSecret) -}}
+AVISO: el chart ha creado el Secret con los valores de values.yaml. Vale para desarrollo,
+NO para producción: usa secrets.existingSecret con un Secret gestionado por el pipeline o
+sincronizado desde Azure Key Vault.
+{{- end }}
