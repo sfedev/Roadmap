@@ -1,17 +1,20 @@
 using System.Globalization;
 using System.Text;
 
-namespace DotNetLab.Api.Services;
+namespace DotNetLab.Analysis;
 
 /// <summary>
 /// Genera el buffer de telemetría sintética que consumen los parsers.
-/// Se registra como Singleton: no guarda estado por petición y la semilla es fija,
-/// así dos ejecuciones con el mismo tamaño producen exactamente el mismo texto.
+/// Se registra como Singleton: no guarda estado mutable y, con la misma semilla, dos
+/// ejecuciones del mismo tamaño producen exactamente el mismo texto.
 /// </summary>
-public sealed class TelemetrySampleGenerator
+// La semilla es un parámetro del constructor y no una constante: la reproducibilidad es una
+// decisión de configuración, no una propiedad del algoritmo. Además permite que un test
+// verifique que semillas distintas generan documentos distintos.
+public sealed class TelemetrySampleGenerator(int seed = TelemetrySampleGenerator.DefaultSeed)
 {
-    // Semilla constante => datos reproducibles => la comparativa span/naive es justa.
-    private const int Seed = 20_251_001;
+    /// <summary>Semilla por defecto; fijarla hace justa la comparativa span/naive.</summary>
+    public const int DefaultSeed = 20_251_001;
 
     // Techo de seguridad: 250k filas son ~12 MB de texto, suficiente para ver el efecto
     // sin que una petición maliciosa reserve gigabytes en el contenedor.
@@ -31,8 +34,8 @@ public sealed class TelemetrySampleGenerator
     /// </summary>
     public string Generate(int rows)
     {
-        // Random con semilla explícita (no Random.Shared) para que el resultado sea determinista.
-        var random = new Random(Seed);
+        // Random con la semilla inyectada (no Random.Shared) para que el resultado sea determinista.
+        var random = new Random(seed);
         // Capacidad estimada (~48 chars/fila): evita que StringBuilder duplique su buffer N veces.
         var builder = new StringBuilder(rows * 48);
         // Instante base fijo: el timestamp no depende del reloj real, otra fuente de determinismo.

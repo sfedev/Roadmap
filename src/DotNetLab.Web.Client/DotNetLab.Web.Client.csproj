@@ -16,6 +16,9 @@
   <ItemGroup>
     <!-- Runtime de Blazor WebAssembly: el que descarga el navegador en el modo Auto. -->
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.9" />
+    <!-- Cliente de SignalR: el navegador abre un WebSocket contra el hub del propio host para
+         enterarse del fin de un trabajo sin preguntar en bucle. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup>

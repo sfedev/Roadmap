@@ -1,4 +1,4 @@
-using DotNetLab.Api.Services;
+using DotNetLab.Analysis;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DotNetLab.Api.Tests;
@@ -36,9 +36,9 @@ public sealed class TelemetryParserTests
     {
         var payload = _generator.Generate(5_000);
 
-        // Calentamiento: la PRIMERA ejecución paga la compilación JIT del método, y el JIT
-        // sí asigna. Sin este paso el test sería intermitente.
-        _span.Parse(payload.AsSpan(0, 1_000));
+        // Calentamiento: la PRIMERA ejecución paga la compilación JIT del método, y ese coste
+        // se contabiliza como memoria del hilo. Sin este paso el test sería intermitente.
+        _span.Warmup(payload.AsSpan(0, 1_000));
 
         var result = _span.Parse(payload);
 

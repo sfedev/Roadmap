@@ -379,7 +379,287 @@ public static class ConceptCatalog
             Endpoint: "GET /api/di/keyed-services")
     ];
 
+    // --- Fase 02 · Cloud, resiliencia y producción -----------------------------------------
+
+    /// <summary>Identificadores de las fichas de la segunda fase.</summary>
+    public const string Observability = "observability";
+    public const string Resilience = "resilience";
+    public const string EventDriven = "event-driven";
+    public const string Kubernetes = "kubernetes";
+    public const string InfrastructureAsCode = "iac";
+
+    /// <summary>Fichas del módulo de nube y producción.</summary>
+    public static IReadOnlyList<Concept> CloudNative { get; } =
+    [
+        new Concept(
+            Id: Observability,
+            Icon: "📡",
+            Title: "OpenTelemetry",
+            Tagline: "Saber qué pasó dentro sin adivinarlo.",
+            WhatIsIt:
+                "Un estándar (no un producto) para producir trazas, métricas y logs correlacionados. " +
+                "Define el formato del dato y el protocolo de transporte, OTLP; quién los almacena y " +
+                "los pinta es una decisión aparte.",
+            HowItWorks:
+                "Cada petición genera una traza con un identificador que viaja en la cabecera W3C " +
+                "'traceparent'. Cuando el frontend llama a la API, esa cabecera cruza el proxy; cuando " +
+                "la API publica un mensaje, MassTransit la mete en las cabeceras de RabbitMQ. Por eso " +
+                "una traza puede abarcar tres procesos y un salto por el broker, y verse como un único " +
+                "árbol de spans. Las métricas usan instrumentos distintos según la pregunta: Counter " +
+                "para cuántas veces ha ocurrido algo, Histogram para cómo se distribuye, y " +
+                "UpDownCounter para cuántos hay ahora mismo.",
+            WhenToUse:
+                "Siempre, desde el primer día: instrumentar después de un incidente llega tarde. La " +
+                "decisión real no es si instrumentar, sino cuánto muestrear: al 100% de trazas, un " +
+                "servicio con tráfico serio genera más telemetría que datos de negocio.",
+            MemoryNote:
+                "ActivitySource.StartActivity devuelve null si nadie escucha, así que el coste es cero " +
+                "cuando no hay listener. Aun así, aquí los spans se abren FUERA de la ventana medida: " +
+                "crear una Activity asigna, y hacerlo dentro falsearía los 0 bytes del parser.",
+            Snippet:
+                """
+                // ServiceDefaults: la misma configuración para API, frontend y Worker.
+                builder.Services.AddOpenTelemetry()
+                    .WithTracing(tracing => tracing
+                        .AddAspNetCoreInstrumentation(o =>
+                        {
+                            // Las sondas de Kubernetes golpean /health cada pocos segundos:
+                            // trazarlas multiplicaría el volumen sin aportar nada.
+                            o.Filter = context => !context.Request.Path.StartsWithSegments("/health");
+                            o.RecordException = true;
+                        })
+                        // Propaga traceparent en las llamadas salientes: enlaza los procesos.
+                        .AddHttpClientInstrumentation()
+                        .AddSource(LabTelemetry.SystemName)
+                        // Cierra la traza a través de RabbitMQ.
+                        .AddSource("MassTransit"))
+                    .WithMetrics(metrics => metrics
+                        .AddRuntimeInstrumentation()   // GC, ThreadPool, excepciones
+                        .AddMeter(LabTelemetry.SystemName)
+                        .AddMeter("Polly"));           // reintentos y aperturas de circuito
+
+                // Instrumentos declarados UNA vez: crearlos por operación filtra memoria.
+                public static readonly Histogram<long> ParseAllocatedBytes = Meter.CreateHistogram<long>(
+                    name: "dotnetlab.parse.allocated_bytes",
+                    unit: "By",   // abreviatura UCUM que exige la convención semántica
+                    description: "Bytes asignados en el Heap durante un parseo.");
+                """,
+            Endpoint: "OTLP → Collector → Jaeger + Prometheus"),
+
+        new Concept(
+            Id: Resilience,
+            Icon: "🛡️",
+            Title: "Polly: retry y circuit breaker",
+            Tagline: "Fallar bien es parte del diseño.",
+            WhatIsIt:
+                "Un conjunto de estrategias componibles que envuelven una operación que puede fallar: " +
+                "reintento, cortacircuitos, timeout, limitador de concurrencia y hedging. En .NET se " +
+                "integran con IHttpClientFactory mediante Microsoft.Extensions.Http.Resilience.",
+            HowItWorks:
+                "El pipeline se ejecuta de fuera adentro: timeout total → reintento → cortacircuitos → " +
+                "timeout por intento. El reintento con backoff exponencial espera cada vez más, y el " +
+                "jitter aleatoriza esa espera para que N clientes que fallaron a la vez no vuelvan a " +
+                "la vez. El cortacircuitos cuenta fallos en una ventana y, superado el umbral, deja de " +
+                "intentarlo: las llamadas siguientes fallan en microsegundos sin tocar la red.",
+            WhenToUse:
+                "Reintentar SOLO operaciones idempotentes y fallos transitorios (un pod reciclándose, " +
+                "un timeout de red). Nunca un 400 o un 401: reintentar un error del cliente lo repite " +
+                "idéntico. Y nunca reintentos sin cortacircuitos: por sí solos AMPLIFICAN una caída, " +
+                "porque multiplican la carga sobre el servicio que ya está mal.",
+            MemoryNote:
+                "Un cortacircuitos abierto ahorra más que ancho de banda: cada llamada evitada es un " +
+                "hilo que no se bloquea esperando su timeout. Sin él, una dependencia caída agota el " +
+                "pool de conexiones del que depende todo lo demás.",
+            Snippet:
+                """
+                // Política estándar de todas las llamadas entre servicios (ServiceDefaults).
+                builder.AddStandardResilienceHandler(options =>
+                {
+                    options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(10);
+                    options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(45);
+
+                    options.Retry.MaxRetryAttempts = 3;
+                    options.Retry.BackoffType = DelayBackoffType.Exponential;
+                    options.Retry.Delay = TimeSpan.FromMilliseconds(500);
+                    // Sin jitter, N réplicas que fallan juntas reintentan juntas.
+                    options.Retry.UseJitter = true;
+
+                    options.CircuitBreaker.FailureRatio = 0.5;
+                    // La librería EXIGE que sea al menos el doble del timeout por intento.
+                    options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+                    // Sin umbral mínimo, un único fallo (1 de 1 = 100%) abriría el circuito.
+                    options.CircuitBreaker.MinimumThroughput = 8;
+                    options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(15);
+                });
+                """,
+            Endpoint: "GET /api/resilience/demo"),
+
+        new Concept(
+            Id: EventDriven,
+            Icon: "📨",
+            Title: "202 Accepted, MassTransit y SignalR",
+            Tagline: "Aceptar rápido, procesar aparte, avisar al terminar.",
+            WhatIsIt:
+                "El patrón de trabajo asíncrono: la API valida, publica un evento y responde 202 con " +
+                "la ubicación del futuro resultado. Otro proceso lo consume y hace el trabajo pesado. " +
+                "El desenlace vuelve al navegador por SignalR, sin que nadie haya mantenido abierta " +
+                "una petición HTTP durante todo el proceso.",
+            HowItWorks:
+                "MassTransit publica el evento en un exchange de RabbitMQ, y cada consumidor registrado " +
+                "obtiene SU PROPIA cola enlazada a ese exchange. Por eso aquí dos servicios distintos " +
+                "reaccionan al mismo evento sin conocerse: la API actualiza su registro de trabajos y " +
+                "el frontend lo reenvía por SignalR. Si un consumidor falla, sus reintentos no afectan " +
+                "al otro, y agotados los intentos el mensaje va a una cola _error donde queda " +
+                "disponible para inspección en vez de perderse.",
+            WhenToUse:
+                "Cuando el trabajo dura más de lo que un usuario tolera esperar, cuando hay que " +
+                "absorber picos sin tumbar el sistema, o cuando varios subsistemas deben reaccionar al " +
+                "mismo hecho. El precio es real: consistencia eventual, posibles mensajes duplicados " +
+                "(el consumidor DEBE ser idempotente) y un broker más que operar.",
+            MemoryNote:
+                "El equivalente al canal acotado es aquí PrefetchCount: cuántos mensajes procesa a la " +
+                "vez cada réplica del Worker. Subirlo sin subir el límite de memoria del pod es la " +
+                "forma más rápida de provocar un OOMKilled en Kubernetes.",
+            Snippet:
+                """
+                // API: acepta, publica y responde. NO procesa.
+                var accepted = await publisher.PublishAsync(request.RowCount, strategy, cancellationToken);
+                // Accepted<T> escribe la cabecera Location además del cuerpo.
+                return TypedResults.Accepted(accepted.StatusUrl, accepted);
+
+                // Worker: consume, hace el trabajo pesado con Span<T> y publica el resultado.
+                public async Task Consume(ConsumeContext<TelemetryAnalysisRequested> context)
+                {
+                    // Latencia de cola: solo se puede calcular con el instante de publicación
+                    // que viaja dentro del propio mensaje.
+                    var queueLatency = (timeProvider.GetUtcNow() - message.RequestedAt).TotalMilliseconds;
+
+                    var result = parser.Parse(generator.Generate(rows));
+
+                    // Publish (y no Send): N suscriptores independientes pueden reaccionar.
+                    await context.Publish(new TelemetryAnalysisCompleted(
+                        message.JobId, result, queueLatency, processingMs,
+                        Environment.MachineName, timeProvider.GetUtcNow()));
+                }
+
+                // Frontend: consume el mismo evento y lo empuja al navegador.
+                await hub.Clients.All.SendAsync("JobUpdated", snapshot, context.CancellationToken);
+                """,
+            Endpoint: "POST /api/analysis/jobs"),
+
+        new Concept(
+            Id: Kubernetes,
+            Icon: "☸️",
+            Title: "Kubernetes: sondas, recursos y HPA",
+            Tagline: "Decirle al cluster cómo se comporta tu aplicación.",
+            WhatIsIt:
+                "Los manifiestos de /k8s: Deployment, Service, ConfigMap, Secret, Ingress, HPA y " +
+                "NetworkPolicy. No describen cómo instalar la aplicación, sino qué estado debe " +
+                "mantener el cluster; el reconciliador se encarga del resto.",
+            HowItWorks:
+                "Las dos sondas NO son lo mismo, y confundirlas es el error clásico: si falla la de " +
+                "liveness, Kubernetes REINICIA el contenedor; si falla la de readiness, lo saca del " +
+                "balanceador pero lo deja vivo. Por eso la de liveness apunta a /health/live, que no " +
+                "consulta ninguna dependencia externa: si comprobara la base de datos, una caída de " +
+                "esta reiniciaría todos los pods a la vez. El HPA, por su parte, compara el uso con el " +
+                "'requests' del contenedor, NUNCA con el 'limits': un requests mal calculado arruina " +
+                "el autoescalado aunque el HPA esté perfecto.",
+            WhenToUse:
+                "Cuando hacen falta control total, portabilidad entre nubes o extensiones del plano de " +
+                "control (operadores, CRDs). Si no es el caso, Container Apps da el 90% del valor sin " +
+                "cluster que operar: por eso el Bicep de este repositorio aprovisiona ambos.",
+            MemoryNote:
+                "Superar el límite de MEMORIA provoca OOMKilled inmediato; superar el de CPU solo " +
+                "provoca throttling. De ahí que el Worker tenga 512Mi de límite con PrefetchCount=4: " +
+                "cuatro buffers de telemetría vivos a la vez tienen que caber.",
+            Snippet:
+                """
+                # Las dos sondas tienen semánticas OPUESTAS: una reinicia, la otra solo despublica.
+                startupProbe:            # da margen al arranque en frío sin relajar liveness
+                  httpGet: { path: /health/live, port: http }
+                  periodSeconds: 2
+                  failureThreshold: 30   # hasta 60 s para levantar
+                livenessProbe:           # si falla -> REINICIA el contenedor
+                  httpGet: { path: /health/live, port: http }
+                  periodSeconds: 10
+                readinessProbe:          # si falla -> lo saca del Service, sin reiniciar
+                  httpGet: { path: /health/ready, port: http }
+                  periodSeconds: 5
+
+                resources:
+                  requests:              # lo que reserva el scheduler Y la base del cálculo del HPA
+                    cpu: 100m
+                    memory: 192Mi
+                  limits:                # superar memoria = OOMKilled; superar CPU = throttling
+                    cpu: "1"
+                    memory: 512Mi
+
+                securityContext:
+                  runAsNonRoot: true
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
+                """,
+            Endpoint: "kubectl apply -f k8s/"),
+
+        new Concept(
+            Id: InfrastructureAsCode,
+            Icon: "🏗️",
+            Title: "Helm y Bicep",
+            Tagline: "La infraestructura también se revisa en un pull request.",
+            WhatIsIt:
+                "Helm empaqueta los manifiestos de Kubernetes en un chart parametrizable con historial " +
+                "de releases y rollback. Bicep describe los recursos de Azure (AKS, ACR, Key Vault, " +
+                "Container Apps) en un lenguaje declarativo que compila a plantillas ARM.",
+            HowItWorks:
+                "Ambos son declarativos e idempotentes: se describe el estado final y la herramienta " +
+                "calcula el cambio. En Bicep, lo que lo hace idempotente es uniqueString(), que deriva " +
+                "los nombres de un hash determinista del grupo de recursos: el mismo despliegue produce " +
+                "siempre los mismos nombres, pero dos suscripciones no chocan. En Helm, la anotación " +
+                "checksum/config es lo que fuerza el rollout de los pods cuando cambia el ConfigMap; " +
+                "sin ella, la configuración se actualiza y los pods siguen con la vieja.",
+            WhenToUse:
+                "Desde el primer despliegue. Un recurso creado a mano en el portal es un recurso que " +
+                "nadie sabe reproducir y que no aparece en ninguna revisión de código.",
+            MemoryNote:
+                "En este repositorio el binario lee sus secretos por RUTA. Pasar de un docker secret a " +
+                "Azure Key Vault (montado por el CSI driver) no cambia una sola línea de C#: solo la " +
+                "ruta del fichero en el ConfigMap.",
+            Snippet:
+                """
+                # Helm: un único deployment.yaml recorre los tres servicios.
+                {{- range $name, $component := .Values.components }}
+                spec:
+                  # Con HPA activo NO se emite 'replicas': si se emitiera, cada `helm upgrade`
+                  # devolvería el número de pods al valor del chart y desharía el autoescalado.
+                  {{- if not $component.autoscaling.enabled }}
+                  replicas: {{ $component.replicaCount }}
+                  {{- end }}
+                  template:
+                    metadata:
+                      annotations:
+                        # Fuerza el rollout de los pods cuando cambia la configuración.
+                        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
+                {{- end }}
+
+                // Bicep: nombres deterministas e idempotentes.
+                var uniqueSuffix = uniqueString(resourceGroup().id)
+
+                // El kubelet descarga imágenes con su identidad gestionada: ningún
+                // imagePullSecret que guardar ni rotar.
+                resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+                  name: guid(acrId, aks.id, acrPullRoleId)   // GUID determinista = idempotente
+                  properties: {
+                    principalId: aks.properties.identityProfile.kubeletidentity.objectId
+                    principalType: 'ServicePrincipal'
+                  }
+                }
+                """,
+            Endpoint: "helm upgrade --install · az deployment group create")
+    ];
+
     /// <summary>Busca una ficha por su identificador.</summary>
     // First y no FirstOrDefault: un id inexistente es un bug de programación, no un caso de uso.
-    public static Concept ById(string id) => All.First(c => c.Id == id);
+    // Busca en las dos fases: el catálogo está partido por módulo, pero los ids son únicos.
+    public static Concept ById(string id) => All.Concat(CloudNative).First(c => c.Id == id);
 }

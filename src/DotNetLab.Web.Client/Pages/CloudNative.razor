@@ -1,0 +1,117 @@
+@* Sección 3 del portal: Fase 02, lo que separa una aplicación que funciona en local de una
+   que se puede operar en producción. Misma estructura que el resto: teoría, playground que
+   ejecuta código real y snippet del repositorio. *@
+@page "/cloud-native"
+@rendermode InteractiveAuto
+
+<PageTitle>Cloud y producción · DotNetLab</PageTitle>
+
+<header class="page-head">
+    <p class="eyebrow">Fase 02 · Módulos 3 a 5</p>
+    <h1>Observabilidad, resiliencia y Kubernetes</h1>
+    <p class="lede">
+        La Fase 01 demuestra que el código es rápido. Esta demuestra que además se puede operar:
+        que se sabe qué está pasando por dentro, que aguanta cuando una dependencia falla y que
+        se despliega de forma reproducible. Los dos primeros playgrounds ejecutan políticas y
+        pipelines reales; los dos últimos documentan la infraestructura de este mismo repositorio.
+    </p>
+
+    <p class="runtime-badge">
+        Este componente se está ejecutando en <strong>@RuntimeLocation</strong>.
+    </p>
+</header>
+
+<nav class="toc" aria-label="Índice de conceptos">
+    @foreach (var concept in ConceptCatalog.CloudNative)
+    {
+        <a class="toc-link" href="#@concept.Id">
+            <span aria-hidden="true">@concept.Icon</span> @concept.Title
+        </a>
+    }
+</nav>
+
+<div class="cards">
+    @foreach (var concept in ConceptCatalog.CloudNative)
+    {
+        <ConceptCard Concept="concept" SnippetSource="@SourceFileFor(concept.Id)" @key="concept.Id">
+            <Playground>
+                @* Las tarjetas de Kubernetes e IaC no llevan playground: no hay nada que un
+                   navegador pueda ejecutar de un manifiesto. ConceptCard oculta la pestaña
+                   cuando el fragmento es null, en vez de mostrar un panel vacío. *@
+                @switch (concept.Id)
+                {
+                    case ConceptCatalog.Observability:
+                        <TelemetryPlayground />
+                        break;
+                    case ConceptCatalog.Resilience:
+                        <ResiliencePlayground />
+                        break;
+                    case ConceptCatalog.EventDriven:
+                        <AsyncJobPlayground />
+                        break;
+                }
+            </Playground>
+        </ConceptCard>
+    }
+</div>
+
+<section class="panel">
+    <h2>Cómo levantar todo esto</h2>
+
+    <div class="pg-grid">
+        <article class="mini-card">
+            <h3>Stack completo en local</h3>
+            <p>
+                <code>docker compose up --build</code> levanta nueve contenedores: los tres servicios,
+                RabbitMQ, Redis, el colector de OpenTelemetry, Jaeger, Prometheus y Grafana.
+                El portal queda en <code>:8081</code>, las trazas en <code>:16686</code> y los
+                paneles en <code>:3000</code>.
+            </p>
+        </article>
+
+        <article class="mini-card">
+            <h3>Kubernetes</h3>
+            <p>
+                <code>kubectl apply -f k8s/</code> para los manifiestos sueltos, o
+                <code>helm install lab ./helm/dotnetlab -f values-dev.yaml</code> para el chart
+                parametrizado. El HPA necesita <code>metrics-server</code>; sin él se queda en
+                <em>unknown</em> sin avisar.
+            </p>
+        </article>
+
+        <article class="mini-card">
+            <h3>Azure</h3>
+            <p>
+                <code>az deployment group create -f infrastructure/main.bicep</code> aprovisiona
+                AKS, ACR, Key Vault, Log Analytics y un entorno de Container Apps. Los secretos
+                pasan de fichero montado por Docker a Key Vault sin tocar una línea de C#.
+            </p>
+        </article>
+    </div>
+
+    <aside class="memory-note">
+        <strong>Sin Docker:</strong> el bus arranca en modo <code>inmemory</code>, así que el
+        playground de trabajos asíncronos funciona igual (la API aloja el consumidor). Lo que no
+        habrá es notificación por SignalR ni trazas en Jaeger: la UI cae entonces al respaldo por
+        consulta periódica, que es exactamente lo que haría en producción si se cayera el WebSocket.
+    </aside>
+</section>
+
+@code {
+    // OperatingSystem.IsBrowser() lo resuelve el compilador por plataforma: true solo cuando el
+    // ensamblado corre sobre WebAssembly.
+    private static string RuntimeLocation =>
+        OperatingSystem.IsBrowser() ? "WebAssembly (navegador)" : "el servidor (circuito SignalR)";
+
+    // Archivo del repositorio del que sale cada snippet, mostrado en la barra del bloque de
+    // código para que el lector pueda abrirlo y comprobar que no es pseudocódigo.
+    private static string SourceFileFor(string conceptId) => conceptId switch
+    {
+        ConceptCatalog.Observability => "src/DotNetLab.ServiceDefaults/ServiceDefaultsExtensions.cs",
+        ConceptCatalog.Resilience => "src/DotNetLab.ServiceDefaults/ResilienceDefaults.cs",
+        ConceptCatalog.EventDriven => "src/DotNetLab.Analysis/TelemetryAnalysisConsumer.cs",
+        ConceptCatalog.Kubernetes => "k8s/deployment.yaml",
+        ConceptCatalog.InfrastructureAsCode => "helm/dotnetlab/templates/deployment.yaml",
+        _ => "k8s/"
+    };
+}

@@ -1,5 +1,6 @@
-<!-- Host del Blazor Web App: sirve el HTML, ejecuta el render de servidor y hace de proxy
-     hacia la Web API. Es el único proceso del frontend expuesto al navegador. -->
+<!-- Host del Blazor Web App: sirve el HTML, ejecuta el render de servidor, hace de proxy
+     hacia la Web API y aloja el hub de SignalR que notifica el fin de los trabajos.
+     Es el único proceso del frontend expuesto al navegador. -->
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
@@ -12,13 +13,20 @@
   <ItemGroup>
     <!-- Sirve los archivos del runtime WebAssembly del proyecto cliente (modo Auto). -->
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.9" />
+    <!-- El frontend es un SUSCRIPTOR MÁS del evento de fin de trabajo: lo consume para
+         reenviarlo por SignalR al navegador. No conoce al Worker ni al revés.
+         Apache-2.0 (la rama 9 de MassTransit es de licencia comercial). -->
+    <PackageReference Include="MassTransit" Version="8.5.10" />
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.5.10" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- El ensamblado cliente aporta las páginas interactivas y se descarga como WASM. -->
     <ProjectReference Include="..\DotNetLab.Web.Client\DotNetLab.Web.Client.csproj" />
-    <!-- Contratos compartidos: el proxy y el render de servidor usan los mismos records. -->
+    <!-- Contratos compartidos: el proxy, el hub y el render de servidor usan los mismos records. -->
     <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+    <!-- OpenTelemetry, health checks y la política de resiliencia del cliente HTTP. -->
+    <ProjectReference Include="..\DotNetLab.ServiceDefaults\DotNetLab.ServiceDefaults.csproj" />
   </ItemGroup>
 
 </Project>

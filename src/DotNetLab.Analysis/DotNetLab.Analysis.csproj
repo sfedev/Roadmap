@@ -1,0 +1,26 @@
+<!-- Dominio de análisis de telemetría: los parsers y el generador de muestras.
+     Se extrajo de la API cuando el Worker necesitó ejecutar EL MISMO parseo con Span<T> al
+     consumir mensajes del bus. Sin esta librería, el Worker tendría que referenciar todo el
+     proyecto web de la API (Kestrel, OpenAPI, rate limiting) solo para reutilizar una clase. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DotNetLab.Analysis</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- El consumidor del trabajo pesado vive junto a los parsers que orquesta: es el mismo
+         caso de uso, solo que disparado por un mensaje en vez de por una petición HTTP.
+         Apache-2.0 (la rama 9 de MassTransit es de licencia comercial). -->
+    <PackageReference Include="MassTransit" Version="8.5.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Los resultados del parseo viajan por HTTP y por el bus con el mismo record. -->
+    <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+    <!-- Aporta LabTelemetry: los parsers publican sus métricas directamente en los
+         instrumentos compartidos, así que la API y el Worker miden lo mismo sin duplicar nada. -->
+    <ProjectReference Include="..\DotNetLab.ServiceDefaults\DotNetLab.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>

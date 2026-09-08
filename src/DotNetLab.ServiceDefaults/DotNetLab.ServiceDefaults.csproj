@@ -1,0 +1,38 @@
+<!-- Configuración transversal compartida por API, frontend y Worker: OpenTelemetry, health
+     checks y las políticas de resiliencia por defecto. Existe para que los tres procesos se
+     observen y se protejan EXACTAMENTE igual, sin copiar cincuenta líneas en cada Program.cs. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DotNetLab.ServiceDefaults</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Sin esto sería una librería "de consola": no compilarían ni WebApplication, ni el
+         mapeo de health checks de ASP.NET Core. FrameworkReference los toma del shared
+         framework ya presente en la imagen de runtime, sin añadir DLLs a la publicación.
+         Va en ItemGroup y no en PropertyGroup: es un item de MSBuild, no una propiedad. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Núcleo de OpenTelemetry integrado con el host genérico: registra el TracerProvider y el
+         MeterProvider como servicios y los apaga ordenadamente al parar la aplicación. -->
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <!-- Instrumentación automática: cada petición HTTP entrante se convierte en un span raíz. -->
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <!-- Instrumenta HttpClient: propaga el contexto de traza (W3C traceparent) a la llamada
+         saliente, que es lo que enlaza los spans del frontend con los de la API. -->
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <!-- Métricas del runtime: GC por generación, bytes asignados, hilos del pool, excepciones.
+         Es la fuente que hace medibles en producción las mismas cifras que enseña el portal. -->
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
+    <!-- ÚNICO exportador. Los procesos hablan OTLP y nada más: cambiar de Jaeger a Azure Monitor
+         es cambiar una variable de entorno, no recompilar. -->
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <!-- Polly v8 integrado con IHttpClientFactory: retry, circuit breaker, timeout y hedging
+         como un pipeline declarativo, con sus propias métricas OpenTelemetry incluidas. -->
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.9.0" />
+  </ItemGroup>
+
+</Project>

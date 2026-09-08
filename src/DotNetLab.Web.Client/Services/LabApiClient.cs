@@ -80,4 +80,53 @@ public sealed class LabApiClient(HttpClient http, LabJsonSerializerContext jsonC
     /// <summary>Estado del servicio y de su contenedor auxiliar.</summary>
     public Task<HealthResponse?> GetHealthAsync(CancellationToken cancellationToken = default)
         => http.GetFromJsonAsync<HealthResponse>("api/diagnostics/health", SerializerOptions, cancellationToken);
+
+    // --- Fase 2: resiliencia y procesamiento asíncrono ------------------------------------
+
+    /// <summary>Ejecuta un escenario de Polly (retry con backoff o circuit breaker).</summary>
+    public Task<ResilienceDemoResponse?> GetResilienceDemoAsync(
+        string scenario, int failures, CancellationToken cancellationToken = default)
+        => http.GetFromJsonAsync<ResilienceDemoResponse>(
+            FormattableString.Invariant($"api/resilience/demo?scenario={scenario}&failures={failures}"),
+            SerializerOptions,
+            cancellationToken);
+
+    /// <summary>
+    /// Encola un análisis pesado. Devuelve el 202 con el identificador del trabajo, NO el
+    /// resultado: este llega después por SignalR o consultando el estado.
+    /// </summary>
+    public async Task<AnalysisJobAccepted?> SubmitAnalysisJobAsync(
+        int rowCount, string strategy, CancellationToken cancellationToken = default)
+    {
+        // PostAsJsonAsync con el contexto generado: sin reflexión y a prueba de trimming.
+        var response = await http.PostAsJsonAsync(
+            "api/analysis/jobs",
+            new AnalysisJobRequest(rowCount, strategy),
+            SerializerOptions,
+            cancellationToken);
+
+        // EnsureSuccessStatusCode convierte un 503 (bus apagado) en HttpRequestException, que
+        // es justo lo que capturan los playgrounds para mostrar el aviso al usuario.
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<AnalysisJobAccepted>(SerializerOptions, cancellationToken);
+    }
+
+    /// <summary>
+    /// Consulta el estado de un trabajo. Es el respaldo de SignalR: si la notificación no
+    /// llega (bus apagado, WebSocket caído), la UI sigue enterándose por esta vía.
+    /// </summary>
+    public async Task<AnalysisJobSnapshot?> GetAnalysisJobAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        var response = await http.GetAsync(
+            FormattableString.Invariant($"api/analysis/jobs/{jobId}"), cancellationToken);
+
+        // Un 404 es un estado NORMAL aquí: el registro vive en memoria de una réplica concreta.
+        // Devolver null y no lanzar deja que el componente siga consultando sin ensuciar la UI.
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<AnalysisJobSnapshot>(SerializerOptions, cancellationToken);
+    }
 }

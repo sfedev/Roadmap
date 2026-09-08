@@ -72,14 +72,16 @@
     // Ficha teórica que pinta la tarjeta.
     [Parameter, EditorRequired] public Concept Concept { get; set; } = default!;
 
-    // Playground interactivo específico de este concepto.
-    [Parameter, EditorRequired] public RenderFragment Playground { get; set; } = default!;
+    // Playground interactivo específico de este concepto. Opcional: los conceptos de
+    // infraestructura (manifiestos, Bicep) no tienen nada que ejecutar desde el navegador,
+    // y forzarles un playground vacío sería peor que no mostrar la pestaña.
+    [Parameter] public RenderFragment? Playground { get; set; }
 
     // Archivo del backend del que procede el snippet, mostrado en la barra del bloque.
     [Parameter] public string? SnippetSource { get; set; }
 
-    // Nombres de las pestañas. static readonly: se comparte entre todas las instancias.
-    private static readonly string[] Tabs = ["Teoría", "Playground", "Código"];
+    // Pestañas visibles: la de Playground solo aparece si hay algo que ejecutar.
+    private string[] Tabs => Playground is null ? ["Teoría", "Código"] : ["Teoría", "Playground", "Código"];
 
     // Pestaña visible. Arranca en Teoría porque el orden pedagógico es entender y luego ejecutar.
     private string _activeTab = "Teoría";

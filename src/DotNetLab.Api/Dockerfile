@@ -18,7 +18,9 @@ COPY ["Directory.Build.props", "global.json", "./"]
 # SOLO los .csproj, no el código. Es lo que permite que 'dotnet restore' se cachee aparte:
 # editar un .cs no invalida esta capa, editar una dependencia sí.
 COPY ["src/DotNetLab.Api/DotNetLab.Api.csproj", "src/DotNetLab.Api/"]
+COPY ["src/DotNetLab.Analysis/DotNetLab.Analysis.csproj", "src/DotNetLab.Analysis/"]
 COPY ["src/DotNetLab.Contracts/DotNetLab.Contracts.csproj", "src/DotNetLab.Contracts/"]
+COPY ["src/DotNetLab.ServiceDefaults/DotNetLab.ServiceDefaults.csproj", "src/DotNetLab.ServiceDefaults/"]
 
 # Restaura el grafo completo de dependencias del proyecto y sus referencias.
 RUN dotnet restore "src/DotNetLab.Api/DotNetLab.Api.csproj"
@@ -75,7 +77,7 @@ USER $APP_UID
 # --spider hace que wget no escriba nada: solo interesa el código de estado.
 # start-period da margen al arranque en frío del runtime antes de contar fallos.
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget --quiet --spider http://localhost:8080/api/diagnostics/health || exit 1
+    CMD wget --quiet --spider http://localhost:8080/health/live || exit 1
 
 # Forma exec (array), no shell: el proceso dotnet es PID 1 y recibe directamente SIGTERM,
 # de modo que ASP.NET Core puede hacer un apagado ordenado en vez de morir por timeout.

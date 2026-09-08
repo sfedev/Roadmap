@@ -54,12 +54,19 @@ public static class ApiProxy
         "connection", "keep-alive", "server", "content-type"
     ];
 
+    // Verbos reenviados. GET para las consultas y POST para encolar un análisis; el resto no
+    // se expone porque ningún endpoint de la API los usa, y un proxy abierto a todos los
+    // métodos es superficie de ataque regalada.
+    private static readonly string[] ForwardedMethods = ["GET", "POST"];
+
     /// <summary>Registra el endpoint comodín /api/{**path}.</summary>
     public static IEndpointRouteBuilder MapApiProxy(this IEndpointRouteBuilder endpoints)
     {
         // {**path} es un catch-all que NO escapa las barras: conserva la ruta completa.
-        endpoints.MapGet("/api/{**path}", ForwardAsync)
+        endpoints.MapMethods("/api/{**path}", ForwardedMethods, ForwardAsync)
             // El proxy no renderiza HTML: excluirlo del antiforgery evita validaciones inútiles.
+            // El POST viaja como JSON desde el cliente WASM, no desde un <form>, así que el
+            // token antiforgery no aplica: la protección aquí es la clave compartida.
             .DisableAntiforgery();
 
         return endpoints;
@@ -78,7 +85,22 @@ public static class ApiProxy
         // QueryString se reenvía tal cual: los parámetros del playground viajan íntegros.
         var target = new Uri(client.BaseAddress!, $"api/{path}{context.Request.QueryString}");
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, target);
+        // El método se copia del original: un POST debe seguir siendo POST al otro lado.
+        using var request = new HttpRequestMessage(new HttpMethod(context.Request.Method), target);
+
+        // Cuerpo: solo lo tienen los métodos que lo admiten. Se envuelve el Stream de la
+        // petición entrante SIN leerlo a memoria, así que un cuerpo grande no se bufferiza.
+        if (!HttpMethods.IsGet(context.Request.Method))
+        {
+            request.Content = new StreamContent(context.Request.Body);
+
+            // Content-Type debe viajar o la API no sabrá deserializar el JSON. TryAddWithoutValidation
+            // evita que un charset raro del cliente haga fallar el parseo de la cabecera.
+            if (!string.IsNullOrEmpty(context.Request.ContentType))
+            {
+                request.Content.Headers.TryAddWithoutValidation("Content-Type", context.Request.ContentType);
+            }
+        }
 
         // ResponseHeadersRead es la clave del streaming: devuelve el control en cuanto llegan las
         // cabeceras, sin esperar (ni bufferizar en memoria) el cuerpo completo. Sin esto, el

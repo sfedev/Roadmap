@@ -13,6 +13,15 @@
   <ItemGroup>
     <!-- OpenAPI nativo de ASP.NET Core (sustituye a Swashbuckle desde .NET 9). -->
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <!-- Bus de mensajes: la API solo PUBLICA la solicitud de análisis y CONSUME el resultado
+         para actualizar el estado del trabajo. El trabajo pesado nunca ocurre aquí.
+         Versión 8.5.10 y NO 9.x a propósito: la rama 9 pasó a licencia comercial (Massient,
+         Inc.), mientras que la 8 sigue siendo Apache-2.0, que es lo que puede usar un
+         repositorio público de portfolio sin comprar una suscripción. -->
+    <PackageReference Include="MassTransit" Version="8.5.10" />
+    <!-- Transporte RabbitMQ. La abstracción de MassTransit permite sustituirlo por Azure
+         Service Bus cambiando UsingRabbitMq por UsingAzureServiceBus, sin tocar consumidores. -->
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.5.10" />
     <!-- 10.0.11 (no 10.0.9) porque las versiones anteriores arrastran Microsoft.OpenApi 2.0.0,
          afectada por GHSA-v5pm-xwqc-g5wc: con TreatWarningsAsErrors, NU1903 rompe el build. -->
   </ItemGroup>
@@ -20,6 +29,11 @@
   <ItemGroup>
     <!-- Los DTOs se comparten con el cliente Blazor: un único contrato, cero duplicación. -->
     <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+    <!-- Dominio de análisis compartido con el Worker: los mismos parsers ejecutan el trabajo
+         síncrono de los endpoints y el asíncrono que llega por el bus. -->
+    <ProjectReference Include="..\DotNetLab.Analysis\DotNetLab.Analysis.csproj" />
+    <!-- OpenTelemetry, health checks y resiliencia, idénticos en los tres procesos. -->
+    <ProjectReference Include="..\DotNetLab.ServiceDefaults\DotNetLab.ServiceDefaults.csproj" />
   </ItemGroup>
 
   <ItemGroup>

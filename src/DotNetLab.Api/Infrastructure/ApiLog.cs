@@ -9,11 +9,6 @@ namespace DotNetLab.Api.Infrastructure;
 // 'partial' porque el source generator escribe la otra mitad; 'static' porque no hay estado.
 internal static partial class ApiLog
 {
-    // EventId estable: permite filtrar este evento concreto en un agregador de logs.
-    [LoggerMessage(EventId = 1000, Level = LogLevel.Information,
-        Message = "Parser {Strategy} procesó {Rows} filas en {Microseconds} us asignando {Bytes} bytes")]
-    public static partial void ParserExecuted(ILogger logger, string strategy, int rows, double microseconds, long bytes);
-
     // Error: las dos estrategias deberían leer exactamente las mismas filas del mismo buffer.
     [LoggerMessage(EventId = 1001, Level = LogLevel.Error,
         Message = "Benchmark inconsistente: span leyó {SpanRows} filas y naive {NaiveRows}")]
@@ -39,4 +34,10 @@ internal static partial class ApiLog
     [LoggerMessage(EventId = 4001, Level = LogLevel.Information,
         Message = "Validación de clave compartida activa en la cabecera {Header} (origen: {Source})")]
     public static partial void SharedKeyEnabled(ILogger logger, string header, string source);
+
+    // Desenlace de un trabajo asíncrono recibido por el bus. El nombre de la réplica del Worker
+    // permite comprobar en los logs que la carga se reparte entre pods.
+    [LoggerMessage(EventId = 5000, Level = LogLevel.Information,
+        Message = "Trabajo {JobId} {Status} (procesado por {Worker})")]
+    public static partial void JobResultReceived(ILogger logger, Guid jobId, string status, string? worker);
 }

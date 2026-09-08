@@ -1,0 +1,27 @@
+<!-- Worker Service que consume del bus el trabajo pesado de análisis.
+     SDK "Web" y no "Worker" a propósito: en Kubernetes, un proceso sin endpoint HTTP no puede
+     tener sondas de liveness ni readiness, así que el kubelet no sabría si está colgado. Este
+     Worker expone SOLO /health/live y /health/ready; no sirve ninguna ruta de negocio. -->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>DotNetLab.Worker</RootNamespace>
+    <UserSecretsId>dotnetlab-worker</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Apache-2.0 (la rama 9 de MassTransit pasó a licencia comercial). -->
+    <PackageReference Include="MassTransit" Version="8.5.10" />
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.5.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- El consumidor y los parsers con Span<T> viven aquí: el Worker no reimplementa nada,
+         ejecuta exactamente el mismo código que los endpoints síncronos de la API. -->
+    <ProjectReference Include="..\DotNetLab.Analysis\DotNetLab.Analysis.csproj" />
+    <ProjectReference Include="..\DotNetLab.Contracts\DotNetLab.Contracts.csproj" />
+    <!-- Misma configuración de OpenTelemetry y health checks que los otros dos procesos. -->
+    <ProjectReference Include="..\DotNetLab.ServiceDefaults\DotNetLab.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>

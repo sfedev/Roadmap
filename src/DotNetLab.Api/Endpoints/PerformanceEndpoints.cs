@@ -1,4 +1,5 @@
 using DotNetLab.Api.Infrastructure;
+using DotNetLab.Analysis;
 using DotNetLab.Api.Services;
 using DotNetLab.Contracts;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -52,11 +53,14 @@ public static class PerformanceEndpoints
         var spanParser = factory.Resolve("span")!;
         var naiveParser = factory.Resolve("naive")!;
 
-        // Calentamiento con un trozo pequeño: fuerza al JIT a compilar ambos métodos ANTES
-        // de medir. Sin esto, la primera estrategia cargaría con el coste de compilación.
+        // Calentamiento con un trozo pequeño: fuerza al JIT a compilar ambos métodos ANTES de
+        // medir. Sin esto, la primera estrategia cargaría con el coste de compilación, que se
+        // contabiliza como memoria asignada del hilo.
+        // Warmup y no Parse: recorre la misma ruta pero sin publicar métricas, para no meter en
+        // los histogramas de OpenTelemetry muestras de un buffer de 8 KB que nadie pidió parsear.
         var warmup = payload.AsSpan(0, Math.Min(payload.Length, 8_192));
-        spanParser.Parse(warmup);
-        naiveParser.Parse(warmup);
+        spanParser.Warmup(warmup);
+        naiveParser.Warmup(warmup);
 
         // Medición real. AsSpan() no copia: entrega una vista sobre el string existente.
         var spanResult = spanParser.Parse(payload);

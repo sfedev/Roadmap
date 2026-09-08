@@ -1,0 +1,275 @@
+@* Playground del flujo asíncrono completo: 202 Accepted -> bus -> Worker -> SignalR.
+   Mantiene DOS caminos de notificación a propósito (SignalR y consulta periódica), porque en
+   un sistema real el WebSocket se cae y la UI no puede quedarse esperando para siempre. *@
+@inject LabApiClient Api
+@inject NavigationManager Navigation
+@* IAsyncDisposable: hay que cerrar el HubConnection al salir de la página o la conexión y su
+   bucle de reconexión seguirían vivos en el navegador. *@
+@implements IAsyncDisposable
+
+<div class="pg">
+    <div class="pg-grid">
+        <label class="field">
+            <span class="field-label">Filas a procesar: <strong>@_rows.ToString("N0")</strong></span>
+            <input type="range" min="10000" max="200000" step="10000"
+                   @bind="_rows" @bind:event="oninput" disabled="@_busy" />
+        </label>
+
+        <label class="field">
+            <span class="field-label">Estrategia del Worker</span>
+            @* El Worker resuelve el parser por esta clave usando Keyed Services. *@
+            <select @bind="_strategy" disabled="@_busy">
+                <option value="span">span (zero-allocation)</option>
+                <option value="naive">naive (string.Split)</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="SubmitAsync" disabled="@_busy">
+            @(_busy ? "Encolando…" : "Encolar análisis")
+        </button>
+
+        @* Estado del canal de notificación: informa de por dónde va a llegar el resultado. *@
+        <span class="chip @(_hubConnected ? "chip-good" : "chip-neutral")">
+            @(_hubConnected ? "SignalR conectado" : "SignalR no disponible · se consultará el estado")
+        </span>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_jobs.Count > 0)
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Trabajo</th>
+                    <th>Estado</th>
+                    <th>Filas</th>
+                    <th>Cola</th>
+                    <th>Proceso</th>
+                    <th>Heap</th>
+                    <th>Réplica</th>
+                    <th>Vía</th>
+                </tr>
+            </thead>
+            <tbody>
+                @* Los trabajos más recientes arriba: es donde mira el usuario tras pulsar. *@
+                @foreach (var entry in _jobs.Values.OrderByDescending(j => j.Snapshot.UpdatedAt))
+                {
+                    <tr @key="entry.Snapshot.JobId">
+                        @* Solo los 8 primeros caracteres del Guid: identifica sin ocupar media tabla. *@
+                        <td><code>@entry.Snapshot.JobId.ToString()[..8]</code></td>
+                        <td>
+                            <span class="chip @StatusClass(entry.Snapshot.Status)">@entry.Snapshot.Status</span>
+                        </td>
+                        <td>@entry.Snapshot.RowCount.ToString("N0")</td>
+                        <td>@FormatMs(entry.Snapshot.QueueLatencyMs)</td>
+                        <td>@FormatMs(entry.Snapshot.ProcessingMs)</td>
+                        <td>
+                            @* Los bytes asignados prueban que el Worker usó de verdad Span<T>. *@
+                            @if (entry.Snapshot.Result is { } result)
+                            {
+                                <span class="chip @(result.AllocatedBytes == 0 ? "chip-good" : "chip-bad")">
+                                    @result.AllocatedBytes.ToString("N0") B
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="pg-note">—</span>
+                            }
+                        </td>
+                        <td><code>@(entry.Snapshot.WorkerInstance ?? "—")</code></td>
+                        @* Deja ver cuál de los dos caminos trajo el resultado: es el detalle que
+                           demuestra que el respaldo por consulta no es decorativo. *@
+                        <td><span class="pg-note">@entry.Channel</span></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <p class="pg-note">
+            El 202 llega en milisegundos porque la API no procesa nada: publica el evento y
+            responde. El trabajo pesado ocurre en el Worker, y su resultado vuelve por el bus.
+        </p>
+    }
+</div>
+
+@code {
+    // Entrada de la tabla: el estado más el canal por el que llegó la última actualización.
+    private sealed record JobEntry(AnalysisJobSnapshot Snapshot, string Channel);
+
+    private int _rows = 50_000;
+    private string _strategy = "span";
+
+    private bool _busy;
+    private string? _error;
+    private bool _hubConnected;
+
+    // Diccionario por id: SignalR y la consulta periódica pueden actualizar el mismo trabajo,
+    // y con una lista habría que buscar y reemplazar en cada notificación.
+    private readonly Dictionary<Guid, JobEntry> _jobs = [];
+
+    // Conexión al hub; null mientras no se haya establecido.
+    private HubConnection? _hub;
+
+    // Cancela las consultas de respaldo pendientes al abandonar la página.
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // OnInitializedAsync se ejecuta TAMBIÉN durante el prerender en servidor, donde no hay
+        // navegador ni WebSocket posible. RendererInfo.IsInteractive distingue ambos momentos:
+        // sin esta guarda, cada visita abriría una conexión inútil desde el servidor.
+        if (!RendererInfo.IsInteractive) return;
+
+        try
+        {
+            _hub = new HubConnectionBuilder()
+                // El hub vive en el MISMO origen que la página: ni CORS ni proxy de por medio.
+                .WithUrl(Navigation.ToAbsoluteUri("/hubs/jobs"))
+                // Reconexión automática: un WebSocket se cae por cualquier motivo (proxy, red,
+                // despliegue) y sin esto la página se quedaría muda para siempre.
+                .WithAutomaticReconnect()
+                .Build();
+
+            // Suscripción al mensaje que difunde el consumidor del frontend.
+            _hub.On<AnalysisJobSnapshot>("JobUpdated", snapshot =>
+            {
+                Apply(snapshot, "SignalR");
+                // InvokeAsync salta al hilo del renderizador: la notificación llega en un hilo
+                // del cliente SignalR, y tocar el estado del componente desde fuera es un bug.
+                return InvokeAsync(StateHasChanged);
+            });
+
+            await _hub.StartAsync(_cts.Token);
+            _hubConnected = _hub.State == HubConnectionState.Connected;
+        }
+        // El hub puede no existir (bus desactivado) o la conexión fallar. No es un error para
+        // el usuario: simplemente se usará el respaldo por consulta.
+        catch (HttpRequestException)
+        {
+            _hubConnected = false;
+        }
+        catch (InvalidOperationException)
+        {
+            _hubConnected = false;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var accepted = await Api.SubmitAnalysisJobAsync(_rows, _strategy, _cts.Token);
+            if (accepted is null)
+            {
+                _error = "La API aceptó el trabajo pero no devolvió su identificador.";
+                return;
+            }
+
+            // Se pinta el trabajo en cuanto se acepta, en estado "accepted": la UI responde de
+            // inmediato aunque el resultado tarde, que es el objetivo de todo el patrón.
+            Apply(new AnalysisJobSnapshot(
+                accepted.JobId, "accepted", accepted.RowCount, accepted.Strategy,
+                null, 0, 0, null, null, accepted.AcceptedAt), "202 Accepted");
+
+            // Respaldo: se consulta el estado en segundo plano por si la notificación no llega.
+            // No se espera aquí (sin await) para no bloquear el botón mientras tanto.
+            _ = PollUntilFinishedAsync(accepted.JobId);
+        }
+        catch (HttpRequestException ex)
+        {
+            // El 503 del bus desactivado llega por aquí; el mensaje explica qué hacer.
+            _error = $"La API no aceptó el trabajo: {ex.Message}. Si estás en local sin Docker, " +
+                     "el bus debe estar en modo 'inmemory' o levantado con docker compose.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Consulta el estado hasta que el trabajo termina o se agota el margen.</summary>
+    private async Task PollUntilFinishedAsync(Guid jobId)
+    {
+        // 30 intentos por segundo de espera: 30 s de margen, de sobra para 200.000 filas.
+        for (var i = 0; i < 30; i++)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), _cts.Token);
+
+                // Si SignalR ya trajo el desenlace, no se sigue preguntando: el respaldo existe
+                // para cuando el canal rápido falla, no para duplicar tráfico.
+                if (_jobs.TryGetValue(jobId, out var current) && current.Snapshot.Status != "accepted") return;
+
+                var snapshot = await Api.GetAnalysisJobAsync(jobId, _cts.Token);
+
+                // null = esta réplica de la API no conoce el trabajo (registro en memoria).
+                // Se sigue intentando: puede que la siguiente petición caiga en la correcta.
+                if (snapshot is null) continue;
+
+                Apply(snapshot, "consulta");
+                await InvokeAsync(StateHasChanged);
+
+                if (snapshot.Status != "accepted") return;
+            }
+            // Cancelación al abandonar la página: es el final normal del bucle, no un error.
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (HttpRequestException)
+            {
+                // Un fallo puntual de red no debe abortar el respaldo entero: se reintenta en
+                // la siguiente vuelta del bucle.
+                continue;
+            }
+        }
+    }
+
+    /// <summary>Registra el último estado conocido de un trabajo.</summary>
+    private void Apply(AnalysisJobSnapshot snapshot, string channel)
+    {
+        // Una actualización "accepted" nunca debe pisar un resultado ya recibido: las dos vías
+        // corren en paralelo y la consulta puede devolver un estado más antiguo que el evento.
+        if (_jobs.TryGetValue(snapshot.JobId, out var existing)
+            && existing.Snapshot.Status != "accepted"
+            && snapshot.Status == "accepted")
+        {
+            return;
+        }
+
+        _jobs[snapshot.JobId] = new JobEntry(snapshot, channel);
+    }
+
+    // Formatea milisegundos; el guion evita mostrar un "0 ms" que parecería una medición real.
+    private static string FormatMs(double value) => value <= 0 ? "—" : $"{value:F0} ms";
+
+    private static string StatusClass(string status) => status switch
+    {
+        "completed" => "chip-good",
+        "failed" => "chip-bad",
+        _ => "chip-neutral"
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        // Cancela primero el bucle de consulta y después cierra el hub, en ese orden: al revés,
+        // el bucle podría lanzar una petición contra una conexión ya cerrada.
+        await _cts.CancelAsync();
+        _cts.Dispose();
+
+        if (_hub is not null)
+        {
+            await _hub.DisposeAsync();
+        }
+    }
+}

@@ -1,4 +1,6 @@
-namespace DotNetLab.Api.Services;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace DotNetLab.Analysis;
 
 /// <summary>
 /// Fábrica sobre los Keyed Services: traduce una clave que llega por HTTP a la

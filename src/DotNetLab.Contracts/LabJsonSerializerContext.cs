@@ -23,5 +23,17 @@ namespace DotNetLab.Contracts;
 [JsonSerializable(typeof(LifetimesDemoResponse))]
 [JsonSerializable(typeof(KeyedServiceResponse))]
 [JsonSerializable(typeof(HealthResponse))]
+// --- Fase 2: resiliencia y arquitectura dirigida por eventos -------------------------------
+[JsonSerializable(typeof(ResilienceDemoResponse))]
+[JsonSerializable(typeof(ResilienceAttempt))]
+[JsonSerializable(typeof(AnalysisJobRequest))]
+[JsonSerializable(typeof(AnalysisJobAccepted))]
+[JsonSerializable(typeof(AnalysisJobSnapshot))]
+// Los eventos del bus también se registran: MassTransit serializa con System.Text.Json y el
+// resolver generado evita que el recorte de IL elimine sus metadatos en una publicación AOT.
+[JsonSerializable(typeof(TelemetryAnalysisRequested))]
+[JsonSerializable(typeof(TelemetryAnalysisCompleted))]
+[JsonSerializable(typeof(TelemetryAnalysisFailed))]
+[JsonSerializable(typeof(IReadOnlyList<AnalysisJobSnapshot>))]
 // 'partial' porque el generador escribe la otra mitad de la clase en obj/.
 public sealed partial class LabJsonSerializerContext : JsonSerializerContext;

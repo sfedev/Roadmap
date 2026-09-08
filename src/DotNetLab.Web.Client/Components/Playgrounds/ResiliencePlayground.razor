@@ -1,0 +1,131 @@
+@* Playground de Polly: ejecuta políticas reales contra una dependencia que falla a propósito
+   y pinta la cronología medida de cada intento. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-controls">
+        @* Los dos escenarios son código distinto en el servidor, no un parámetro cosmético. *@
+        @foreach (var option in Scenarios)
+        {
+            <button type="button"
+                    class="btn @(option.Key == _scenario ? "btn-primary" : null)"
+                    @onclick="() => SelectAsync(option.Key)"
+                    disabled="@_busy"
+                    @key="option.Key">
+                @option.Label
+            </button>
+        }
+    </div>
+
+    @* El número de fallos solo aplica al escenario de reintentos: en el del circuito, la
+       dependencia está caída del todo por definición. *@
+    @if (_scenario == RetryScenario)
+    {
+        <label class="field">
+            <span class="field-label">Fallos antes de recuperarse: <strong>@_failures</strong></span>
+            <input type="range" min="0" max="6" step="1"
+                   @bind="_failures" @bind:event="oninput" disabled="@_busy" />
+        </label>
+    }
+
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">
+            @(_busy ? "Ejecutando políticas…" : "Ejecutar")
+        </button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_result is { } r)
+    {
+        <div class="chips">
+            @* El estado del circuito lo reporta el StateProvider de Polly, no se deduce. *@
+            <span class="chip @(r.Succeeded ? "chip-good" : "chip-bad")">
+                @(r.Succeeded ? "resuelto" : "no resuelto")
+            </span>
+            <span class="chip @(r.CircuitState == "open" ? "chip-bad" : "chip-neutral")">
+                circuito: @r.CircuitState
+            </span>
+            <span class="chip chip-neutral">@r.TotalAttempts intentos</span>
+            <span class="chip chip-neutral">@r.TotalElapsedMs.ToString("F0") ms totales</span>
+        </div>
+
+        <ol class="stream">
+            @foreach (var attempt in r.Attempts)
+            {
+                <li class="stream-item" @key="attempt.Attempt">
+                    <span class="stream-seq">#@attempt.Attempt</span>
+                    <code class="stream-payload">@attempt.Detail</code>
+                    @* La espera medida es lo que hace visible el backoff y el jitter. *@
+                    <span class="stream-time">+@attempt.DelayBeforeMs.ToString("F0") ms</span>
+                    <span class="chip @OutcomeClass(attempt.Outcome)">@attempt.Outcome</span>
+                </li>
+            }
+        </ol>
+
+        <p class="pg-note">@r.Insight</p>
+    }
+</div>
+
+@code {
+    // Constante local para no repetir el literal en el marcado y en el código.
+    private const string RetryScenario = "retry";
+
+    // Escenarios ofrecidos; el servidor valida igualmente contra su propia lista blanca.
+    private static readonly (string Key, string Label)[] Scenarios =
+    [
+        (RetryScenario, "Retry con backoff"),
+        ("circuit-breaker", "Circuit breaker")
+    ];
+
+    private string _scenario = RetryScenario;
+    private int _failures = 2;
+
+    private bool _busy;
+    private ResilienceDemoResponse? _result;
+    private string? _error;
+
+    // Cambiar de escenario ejecuta directamente: ahorra un clic y deja claro que son dos
+    // comportamientos distintos, no una variante del mismo.
+    private async Task SelectAsync(string scenario)
+    {
+        _scenario = scenario;
+        await RunAsync();
+    }
+
+    private async Task RunAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _result = await Api.GetResilienceDemoAsync(_scenario, _failures);
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = $"No se pudo contactar con la API: {ex.Message}";
+        }
+        catch (TaskCanceledException)
+        {
+            // El escenario de reintentos con 6 fallos puede acercarse al timeout del cliente.
+            _error = "La demostración superó el tiempo de espera del cliente.";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // Color del resultado de cada intento; "circuit-open" merece su propio color porque no es
+    // un fallo de la dependencia, sino una decisión de la política.
+    private static string OutcomeClass(string outcome) => outcome switch
+    {
+        "success" => "chip-good",
+        "circuit-open" => "chip-neutral",
+        _ => "chip-bad"
+    };
+}

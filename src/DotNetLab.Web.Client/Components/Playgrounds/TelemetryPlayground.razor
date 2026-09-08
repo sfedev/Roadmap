@@ -1,0 +1,128 @@
+@* Playground de observabilidad: genera tráfico instrumentado de verdad para que aparezcan
+   trazas en Jaeger y series en Prometheus. No simula telemetría: llama a los endpoints reales
+   y mide el tiempo de ida y vuelta desde el navegador. *@
+@inject LabApiClient Api
+
+<div class="pg">
+    <div class="pg-controls">
+        <button class="btn btn-primary" @onclick="GenerateAsync" disabled="@_busy">
+            @(_busy ? "Generando tráfico…" : "Generar tráfico instrumentado")
+        </button>
+        <span class="pg-note">Cada llamada produce una traza distribuida completa.</span>
+    </div>
+
+    @if (_error is not null)
+    {
+        <p class="alert alert-error">@_error</p>
+    }
+
+    @if (_calls.Count > 0)
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Resultado</th>
+                    <th>Ida y vuelta</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var call in _calls)
+                {
+                    <tr @key="call.Endpoint">
+                        <td><code>@call.Endpoint</code></td>
+                        <td>
+                            <span class="chip @(call.Succeeded ? "chip-good" : "chip-bad")">@call.Detail</span>
+                        </td>
+                        @* Tiempo medido en el navegador: incluye red, proxy y serialización, así
+                           que siempre será mayor que la duración del span del servidor. Comparar
+                           ambas cifras es justo lo que enseña dónde se va el tiempo. *@
+                        <td>@call.ElapsedMs.ToString("F0") ms</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <aside class="memory-note">
+            <strong>Dónde mirar ahora:</strong> con la solución levantada con
+            <code>docker compose up</code>, abre <code>http://localhost:16686</code> (Jaeger),
+            elige el servicio <code>dotnetlab-web</code> y busca la traza más reciente. Verás un
+            span por cada salto: navegador → proxy del frontend → API → parser. Las métricas de
+            estas mismas llamadas están en <code>http://localhost:9090</code> (Prometheus) bajo
+            <code>dotnetlab_parse_duration</code> y en los paneles de Grafana
+            (<code>http://localhost:3000</code>).
+        </aside>
+    }
+</div>
+
+@code {
+    // Resultado de una llamada del generador de tráfico.
+    private sealed record CallResult(string Endpoint, bool Succeeded, string Detail, double ElapsedMs);
+
+    private bool _busy;
+    private string? _error;
+    private readonly List<CallResult> _calls = [];
+
+    /// <summary>Llama a varios endpoints reales para poblar trazas y métricas.</summary>
+    private async Task GenerateAsync()
+    {
+        _busy = true;
+        _error = null;
+        _calls.Clear();
+
+        try
+        {
+            // Tres endpoints distintos: uno pesado en CPU y memoria, uno de lenguaje y uno de
+            // DI. Así la traza no es un único span plano y las métricas tienen varias etiquetas.
+            await MeasureAsync("/api/performance/span-demo", async () =>
+            {
+                var result = await Api.GetSpanDemoAsync(15_000);
+                return result is null ? "sin respuesta" : $"{result.Span.RowsParsed:N0} filas";
+            });
+
+            await MeasureAsync("/api/language/records", async () =>
+            {
+                var result = await Api.GetRecordsDemoAsync();
+                return result is null ? "sin respuesta" : "records evaluados";
+            });
+
+            await MeasureAsync("/api/di/lifetimes", async () =>
+            {
+                var result = await Api.GetLifetimesAsync();
+                return result is null ? "sin respuesta" : $"petición {result.RequestId[^6..]}";
+            });
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Ejecuta una llamada midiéndola y registra el resultado sin dejar que rompa el resto.</summary>
+    // Recibe una función y no una URL: el cliente tipado es quien conoce las rutas, y así este
+    // método no duplica ese conocimiento.
+    private async Task MeasureAsync(string endpoint, Func<Task<string>> call)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        try
+        {
+            var detail = await call();
+            _calls.Add(new CallResult(
+                endpoint, true, detail,
+                System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+        }
+        catch (HttpRequestException ex)
+        {
+            // Una llamada fallida también genera traza (marcada como error en Jaeger), así que
+            // se registra igualmente en la tabla en vez de abortar el generador.
+            _calls.Add(new CallResult(
+                endpoint, false, ex.Message,
+                System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+        }
+
+        // StateHasChanged por llamada: la tabla se va rellenando en vivo en lugar de aparecer
+        // entera al final, que es lo que hace evidente que son peticiones reales y secuenciales.
+        StateHasChanged();
+    }
+}

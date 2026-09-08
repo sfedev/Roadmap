@@ -14,6 +14,7 @@ COPY ["Directory.Build.props", "global.json", "./"]
 COPY ["src/DotNetLab.Web/DotNetLab.Web.csproj", "src/DotNetLab.Web/"]
 COPY ["src/DotNetLab.Web.Client/DotNetLab.Web.Client.csproj", "src/DotNetLab.Web.Client/"]
 COPY ["src/DotNetLab.Contracts/DotNetLab.Contracts.csproj", "src/DotNetLab.Contracts/"]
+COPY ["src/DotNetLab.ServiceDefaults/DotNetLab.ServiceDefaults.csproj", "src/DotNetLab.ServiceDefaults/"]
 
 # Restaurar el host arrastra a sus referencias, incluido el workload de WebAssembly.
 RUN dotnet restore "src/DotNetLab.Web/DotNetLab.Web.csproj"
