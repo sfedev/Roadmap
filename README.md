@@ -162,6 +162,6 @@ Cada push a `main` dispara un workflow de CI con cuatro trabajos:
 
 | Archivo | Para qué |
 |---|---|
-| [PROJECT_DEVLOG.md](PROJECT_DEVLOG.md) | Registro de desarrollo: decisiones, alternativas descartadas y los veinte problemas reales que aparecieron, con su medición y su solución. Incluye la sección **Career & Resume Impact** con logros para CV en inglés y el mapeo con los temarios de AZ-204 y CKAD |
+| [PROJECT_DEVLOG.md](PROJECT_DEVLOG.md) | Registro de desarrollo: decisiones, alternativas descartadas y los veintitrés problemas reales que aparecieron, con su medición y su solución. Incluye la sección **Career & Resume Impact** con logros para CV en inglés y el mapeo con los temarios de AZ-204 y CKAD |
 | [CLAUDE.md](CLAUDE.md) | Comandos (dotnet, Docker, Kubernetes, Helm, Bicep), estándares de estilo y patrones de observabilidad, resiliencia y mensajería |
 | [AGENTS.md](AGENTS.md) | Mapa de la arquitectura, guías paso a paso para extender el sistema (nueva métrica, nuevo consumidor, nuevo manifiesto) y limitaciones conocidas |

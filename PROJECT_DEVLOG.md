@@ -770,14 +770,85 @@ Todo lo siguiente se ejecutó de verdad:
   el de trabajos asíncronos completa un trabajo de 50.000 filas mostrando por qué canal llegó.
 - `POST /api/analysis/jobs` a través del proxy del frontend: **202**.
 
-**Pendiente de verificar:** el stack de nueve contenedores (`docker compose up`) y los manifiestos
-contra un cluster real. Docker Desktop está instalado en la máquina de desarrollo pero su demonio
-no estaba en ejecución. Lo cubre el workflow de CI, que construye las tres imágenes, levanta el
-stack completo, recorre el flujo asíncrono de punta a punta comprobando que **el trabajo lo procesó
-otro contenedor** (comparando `workerInstance` con el hostname de la API) y verifica que las
-métricas llegan a Prometheus y las trazas a Jaeger. El mismo workflow valida los manifiestos con
-`kubectl --dry-run`, renderiza el chart con los dos ficheros de valores y compila el Bicep con
-`az bicep build`.
+### Verificación en CI del stack completo
+
+Docker Desktop está instalado en la máquina de desarrollo pero su demonio no estaba en ejecución,
+así que la verificación del stack de contenedores la hace el workflow. Estos son los datos reales
+de la ejecución en verde:
+
+```
+{"status":"Healthy","runtimeVersion":".NET 10.0.11","insideContainer":true,
+ "machineName":"51a9113d780e",
+ "cache":{"reachable":true,"latencyMs":3.23,"detail":"Respondió +PONG."}}
+
+202 Accepted: {"jobId":"01a0805b-...","rowCount":50000,"strategy":"span"}
+Procesado por 'db782036507c'; la API es '51a9113d780e'.
+Bytes asignados en el Heap: 0
+GET directo a la API sin cabecera: HTTP 401
+Prometheus tiene 1 serie(s) de dotnetlab_parse_operations_total.
+Jaeger conoce los servicios: ["dotnetlab-web","dotnetlab-api","dotnetlab-worker"]
+```
+
+Cada línea cierra una duda distinta:
+
+- **La sonda RESP funciona por la red interna** (`+PONG` en 3,23 ms). Era el punto que quedaba
+  pendiente desde la Fase 5.
+- **El trabajo lo procesó OTRO contenedor**: `db782036507c` frente a `51a9113d780e` de la API. Si
+  coincidieran, significaría que el bus no se usó y todo ocurrió en un proceso.
+- **0 bytes asignados** en la ruta con `Span<T>`, ya en el primer trabajo del proceso: el arreglo
+  del calentamiento del JIT funciona también dentro del contenedor.
+- **401 sin cabecera**: la clave compartida se está aplicando de verdad.
+- **Los tres servicios aparecen en Jaeger** y las métricas llegan a Prometheus: la tubería
+  aplicación → OTLP → colector → backends está completa.
+
+### Retos que destapó la propia CI
+
+#### Reto 21 · RabbitMQ 4 rechaza las variables `*_FILE`
+
+El stack no arrancaba: `dependency failed to start: container dotnetlab-rabbitmq is unhealthy`. En
+los logs del contenedor, repetido en bucle:
+
+```
+error: RABBITMQ_DEFAULT_PASS_FILE is set but deprecated
+error: deprecated environment variables detected
+Please use a configuration file instead
+```
+
+La imagen oficial **eliminó** el soporte de las variables `*_FILE`. La salida evidente —usar
+`RABBITMQ_DEFAULT_PASS` con el valor— rompía la propiedad que el proyecto enseña: el secreto
+volvería a viajar como variable de entorno (visible en `docker inspect`) y habría **dos** valores
+que mantener sincronizados, el del broker y el del fichero que leen los tres servicios.
+
+**Solución:** generar `rabbitmq.conf` al arrancar el contenedor a partir del mismo docker secret.
+Se mantiene una única fuente de verdad. Detalle no obvio: el comando no usa **ningún `$`**, porque
+Compose interpola variables en el fichero y obligaría a escribir `$$`, dejando ambiguo qué recibe
+realmente el contenedor. Con `echo` y `cat` el resultado es literal.
+
+#### Reto 22 · `kubectl --dry-run=client` no valida sin cluster
+
+```
+error: unable to recognize "k8s/configmap.yaml": Get "http://localhost:8080/api?timeout=32s":
+dial tcp [::1]:8080: connect: connection refused
+```
+
+Pese a llamarse "client", el dry-run contacta con el servidor de API para **descubrir los tipos de
+recurso** a través del RESTMapper. Sin cluster no funciona, y `--validate=false` no lo evita.
+
+**Solución:** `kubeconform`, que valida contra los esquemas JSON publicados de Kubernetes sin red
+ni cluster. Con `-strict` además rechaza campos desconocidos: un `livenessProb` mal escrito pasaría
+la validación normal y luego **no haría nada** en el cluster, que es de los errores más difíciles
+de ver.
+
+#### Reto 23 · Un 401 que era un acierto del sistema
+
+El paso de integración fallaba con 401 en bucle al consultar el estado del trabajo. El fallo estaba
+en la prueba: sondeaba la API directamente (`:8080`), que exige la clave compartida, en vez de ir
+por el proxy del frontend (`:8081`), que es quien la añade. El sistema se comportaba exactamente
+como debía.
+
+Se corrigió el sondeo y, ya que el hallazgo era útil, se convirtió en una **aserción explícita**:
+un endpoint protegido llamado sin cabecera debe responder 401. Si algún día respondiera 200, la
+protección estaría desactivada y nadie se habría enterado.
 
 ---
 
@@ -895,8 +966,10 @@ esperar que el consumidor liberase hueco.
 |---|---|
 | Retry, 2 fallos configurados | 3 intentos, esperas de 16,7 → 188,9 → 76,3 ms, resuelto en 282 ms |
 | Circuit breaker, dependencia caída | 4 fallos reales, circuito **abierto**, 6 de 10 llamadas cortadas, 7,6 ms totales |
-| Trabajo asíncrono, 50.000 filas | Latencia de cola 1,5 ms, procesamiento 3,0 ms, **0 bytes** asignados |
+| Trabajo asíncrono, 50.000 filas (local, bus en memoria) | Latencia de cola 1,5 ms, procesamiento 3,0 ms, **0 bytes** asignados |
 | Mismo trabajo **sin** calentamiento del JIT | 7.840 bytes y 12.323 µs en la primera ejecución (ver reto 12) |
+| Mismo trabajo en contenedores separados (CI, RabbitMQ real) | Procesado por otro contenedor, **0 bytes** asignados |
+| Sonda RESP a la cache por la red interna de Docker | `+PONG` en 3,23 ms |
 
 Las esperas del retry no son 150/300 ms exactos ni crecen una a una: con `UseJitter`, Polly aplica
 jitter decorrelacionado, que aleatoriza cada espera alrededor de una media que sí crece de forma
