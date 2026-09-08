@@ -36,8 +36,22 @@ Los tres primeros tienen playground ejecutable.
 
 ### Con Docker (stack completo)
 
+En Git Bash, WSL, macOS o Linux:
+
 ```bash
 openssl rand -base64 32 > secrets/lab_shared_key.txt && openssl rand -base64 24 > secrets/rabbitmq_password.txt
+```
+
+En **PowerShell** hace falta otra forma. No es capricho: PowerShell 5.1 escribe la redirección `>`
+en UTF-16 con BOM, y el contenedor de RabbitMQ lee ese fichero con `cat` para generar su
+configuración — con BOM y bytes nulos, no arranca.
+
+```powershell
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-Object byte[] 32; $rng.GetBytes($b); [Convert]::ToBase64String($b) | Out-File -Encoding ascii -NoNewline secrets\lab_shared_key.txt
+```
+
+```powershell
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-Object byte[] 24; $rng.GetBytes($b); [Convert]::ToBase64String($b) | Out-File -Encoding ascii -NoNewline secretsabbitmq_password.txt
 ```
 
 ```bash

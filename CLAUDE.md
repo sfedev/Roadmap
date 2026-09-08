@@ -69,10 +69,30 @@ sonda a la cache responde "deshabilitada". Es el comportamiento correcto, no un 
 
 ### Docker
 
-Antes del primer arranque hay que generar el secreto:
+Antes del primer arranque hay que generar los **dos** secretos. En Git Bash, WSL, macOS o Linux:
 
 ```bash
-openssl rand -base64 32 > secrets/lab_shared_key.txt
+openssl rand -base64 32 > secrets/lab_shared_key.txt && openssl rand -base64 24 > secrets/rabbitmq_password.txt
+```
+
+En **PowerShell** no sirve ese comando, por dos motivos independientes: `openssl` no está en el
+PATH (aunque Git for Windows lo trae en `C:\Program Files\Git\usr\bin\openssl.exe`) y, sobre todo,
+**la redirección `>` de PowerShell 5.1 escribe UTF-16 con BOM**. El contenedor de RabbitMQ lee ese
+fichero con `cat` para generar su `rabbitmq.conf`: con BOM y bytes nulos no arranca, y el error que
+se ve es un `dependency failed to start` que no apunta a la causa.
+
+```powershell
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-Object byte[] 32; $rng.GetBytes($b); [Convert]::ToBase64String($b) | Out-File -Encoding ascii -NoNewline secrets\lab_shared_key.txt
+```
+
+```powershell
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create(); $b = New-Object byte[] 24; $rng.GetBytes($b); [Convert]::ToBase64String($b) | Out-File -Encoding ascii -NoNewline secrets\rabbitmq_password.txt
+```
+
+Comprobar que quedaron sin BOM (deben ser 44 y 32 bytes):
+
+```powershell
+Get-ChildItem secrets\*.txt -Exclude *example* | ForEach-Object { "$($_.Name) $((Get-Item $_).Length) bytes" }
 ```
 
 ```bash
