@@ -66,11 +66,24 @@ services:
   rabbitmq:
     image: rabbitmq:4-management-alpine
     container_name: dotnetlab-rabbitmq
-    environment:
-      - RABBITMQ_DEFAULT_USER=dotnetlab
-      # _FILE es una convención de la imagen oficial: lee la contraseña del fichero indicado
-      # en vez de tomarla de la variable. Así el secreto no viaja como variable de entorno.
-      - RABBITMQ_DEFAULT_PASS_FILE=/run/secrets/rabbitmq_password
+    # La imagen oficial ELIMINÓ el soporte de las variables *_FILE: con
+    # RABBITMQ_DEFAULT_PASS_FILE, RabbitMQ 4 se niega a arrancar ("deprecated environment
+    # variables detected"). La alternativa que documenta la imagen es un fichero de
+    # configuración, así que se genera al vuelo desde el docker secret.
+    #
+    # Se hace así, y no poniendo la contraseña en RABBITMQ_DEFAULT_PASS, para que siga
+    # existiendo UNA sola fuente de verdad: el mismo fichero que leen la API, el frontend y
+    # el Worker. Con la variable de entorno habría dos valores que mantener sincronizados, y
+    # además aparecería en 'docker inspect'.
+    # Sin '$' en todo el comando a propósito: Compose interpola las variables del fichero y
+    # obligaría a escribir '$$', dejando ambiguo qué recibe realmente el contenedor. Con echo
+    # y cat el resultado es literal y no depende de ninguna regla de escapado.
+    command:
+      - sh
+      - -c
+      - |
+        { echo "default_user = dotnetlab"; echo -n "default_pass = "; cat /run/secrets/rabbitmq_password; } > /etc/rabbitmq/rabbitmq.conf
+        exec docker-entrypoint.sh rabbitmq-server
     secrets:
       - rabbitmq_password
     ports:

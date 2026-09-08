@@ -133,15 +133,21 @@ jobs:
         uses: actions/checkout@v7
 
       # --- Kubernetes ---------------------------------------------------------
-      # --dry-run=client valida la sintaxis y el esquema SIN necesidad de un cluster.
-      # No detecta errores semánticos (una imagen que no existe), pero sí un campo mal escrito,
-      # que es el fallo que más tiempo hace perder.
-      - name: Validar los manifiestos de Kubernetes
+      # kubeconform y NO `kubectl apply --dry-run=client`: pese a su nombre, el dry-run de
+      # cliente contacta con el servidor de API para descubrir los tipos de recurso, así que
+      # sin cluster falla con "connection refused". kubeconform valida contra los esquemas
+      # JSON publicados de Kubernetes, sin red ni cluster.
+      - name: Instalar kubeconform
         run: |
-          for file in k8s/*.yaml; do
-            echo "Validando $file"
-            kubectl apply --dry-run=client --validate=false -f "$file"
-          done
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/kubeconform
+          kubeconform -v
+
+      # -strict rechaza campos desconocidos: un `livenessProb` mal escrito pasaría
+      # desapercibido sin esta opción y no haría nada en el cluster.
+      - name: Validar los manifiestos de Kubernetes
+        run: kubeconform -strict -summary -kubernetes-version 1.31.0 k8s/
 
       # --- Helm ---------------------------------------------------------------
       # helm lint detecta plantillas rotas y valores obligatorios que faltan.
@@ -164,8 +170,8 @@ jobs:
       # Lo renderizado tiene que ser Kubernetes VÁLIDO, no solo YAML bien formado.
       - name: Validar la salida renderizada contra el esquema de Kubernetes
         run: |
-          kubectl apply --dry-run=client --validate=false -f /tmp/render-dev.yaml
-          kubectl apply --dry-run=client --validate=false -f /tmp/render-prod.yaml
+          kubeconform -strict -summary -kubernetes-version 1.31.0 /tmp/render-dev.yaml
+          kubeconform -strict -summary -kubernetes-version 1.31.0 /tmp/render-prod.yaml
 
       # Comprobación de una regla concreta: con autoescalado activo, el Deployment NO debe
       # emitir 'replicas', o cada `helm upgrade` desharía el trabajo del HPA.
