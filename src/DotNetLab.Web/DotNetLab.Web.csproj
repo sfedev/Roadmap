@@ -21,7 +21,7 @@
 
   <ItemGroup>
     <!-- Sirve los archivos del runtime WebAssembly del proyecto cliente (modo Auto). -->
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.9" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.13" />
     <!-- El frontend es un SUSCRIPTOR MÁS del evento de fin de trabajo: lo consume para
          reenviarlo por SignalR al navegador. No conoce al Worker ni al revés.
          Apache-2.0 (la rama 9 de MassTransit es de licencia comercial). -->
